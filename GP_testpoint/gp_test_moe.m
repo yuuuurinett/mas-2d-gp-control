@@ -1,37 +1,31 @@
-function [Phi_Xi_vector, Zeta_vector, Xi_diff] = gp_poe( ...
+function [Phi_Xi_vector, Zeta_vector] = gp_test_moe( ...
     AgentState_matrix, LocalGP_set, L, ...
     Kappa_P, AgentQuantity, Zeta_vector, TimeStep)
 
-
-P_ReferenceSignal = zeros(4, AgentQuantity);
+P = zeros(4, AgentQuantity);  % 2 output dims x 2 moments each
 for AgentNr = 1:AgentQuantity
     [mu_n, var_n] = LocalGP_set{AgentNr}.predict(AgentState_matrix(:, AgentNr));
-    var_n1 = var_n(1);
-    var_n2 = var_n(2);
-    P_ReferenceSignal(1, AgentNr) = AgentQuantity * mu_n(1) / var_n1;
-    P_ReferenceSignal(2, AgentNr) = AgentQuantity * mu_n(2) / var_n2;
-    P_ReferenceSignal(3, AgentNr) = AgentQuantity / var_n1;
-    P_ReferenceSignal(4, AgentNr) = AgentQuantity / var_n2;
+    P(1, AgentNr) = AgentQuantity * mu_n(1);
+    P(2, AgentNr) = AgentQuantity * mu_n(2);
+    P(3, AgentNr) = AgentQuantity * (var_n(1) + mu_n(1)^2);
+    P(4, AgentNr) = AgentQuantity * (var_n(2) + mu_n(2)^2);
 end
 
 New_Consensus_Zeta_function = @(~, Zeta_vec)  ...
     Compute_New_Consensus_Derivative( ...
-    Zeta_vec, P_ReferenceSignal, L, Kappa_P, AgentQuantity);
+    Zeta_vec, P, L, Kappa_P, AgentQuantity);
 
 [~, Zeta_Output] = ode45(New_Consensus_Zeta_function, ...
     [0, TimeStep], Zeta_vector(:));
 Zeta_vector = reshape(Zeta_Output(end,:)', 4, AgentQuantity);
 
+Xi_matrix = P - Zeta_vector;
 
-Xi_matrix = P_ReferenceSignal - Zeta_vector;
-
-Phi_Xi_vector(1,:) = Xi_matrix(1,:) ./ Xi_matrix(3,:);
-Phi_Xi_vector(2,:) = Xi_matrix(2,:) ./ Xi_matrix(4,:);
-
-Xi_diff = sum(pdist(Xi_matrix', 'euclidean'));
+Phi_Xi_vector(1,:) = Xi_matrix(1,:) / AgentQuantity;
+Phi_Xi_vector(2,:) = Xi_matrix(2,:) / AgentQuantity;
 end
 
-%%
+%% compute zeta_dot
 function dZeta_dt = Compute_New_Consensus_Derivative(...
     Zeta_vec, P_Ref, L, Kappa, AgentQuantity)
 

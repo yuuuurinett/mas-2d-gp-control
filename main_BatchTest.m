@@ -1,119 +1,113 @@
 clc; clear; close all;
 
-%% 1. 配置仿真模式
-% 5种masked GP聚合方法 + 原有对比基线
-SimulationModes = {
-    'poe',               % Masked PoE (Product of Experts)
-    'gpoe',              % Masked gPoE (Generalized Product of Experts)
-    'moe',               % Masked MoE (Mixture of Experts)
-    'bcm',               % Masked BCM (Bayesian Committee Machine)
-    'rbcm',              % Masked rBCM (Robust Bayesian Committee Machine)
-    'local',             % Local GP (no cooperation, baseline)
-    'exact'              % Exact dynamics (oracle upper bound)
-};
+%% setting
+Modes_5        = {'poe','gpoe','moe','bcm','rbcm'};
+Modes_baseline = {'local','exact'};
+AllModes       = [Modes_5, Modes_baseline];
 
-SaveFolderName = fullfile('Result', 'Main_Simulation_Results');
-if ~exist(SaveFolderName, 'dir'), mkdir(SaveFolderName); end
+SaveFolder_Test     = fullfile('Result','Test_Point');
+SaveFolder_Inducing = fullfile('Result','Inducing_Point');
 
-%% 2. 运行仿真
-do_simulation = true; 
+%% 1. simulation
+do_simulation = true;
 if do_simulation
-    for ModeNr = 1:numel(SimulationModes)
-        CurrentMode = SimulationModes{ModeNr};
-        fprintf('\n========================================\n');
-        fprintf('运行模式 [%d/%d]: %s\n', ModeNr, numel(SimulationModes), CurrentMode);
-        fprintf('========================================\n');
-        run_main_simulation_mode(CurrentMode, SaveFolderName, CurrentMode);
+   
+    fprintf('\n======== 测试点聚合 ========\n');
+    for m = 1:numel(AllModes)
+        fprintf('[%d/%d] %s\n', m, numel(AllModes), AllModes{m});
+        run_simulation_test_point(AllModes{m}, SaveFolder_Test, AllModes{m});
     end
+
+    
+
+    fprintf('\n======== 诱导点聚合 ========\n');
+    for m = 1:numel(AllModes)
+        fprintf('[%d/%d] %s\n', m, numel(AllModes), AllModes{m});
+        run_simulation_inducing_point(AllModes{m}, SaveFolder_Inducing, AllModes{m});
+    end
+    
 end
 
-%% 3. 加载所有结果
-NumModes = numel(SimulationModes);
+%% 2. 
+N = numel(AllModes);
+temp = load(fullfile(SaveFolder_Test,[AllModes{1},'.mat']), ...
+    't_set','bound_local','bound_distributed','bound_exact');
+temp = load(fullfile(SaveFolder_Test,[AllModes{1},'.mat']), 't_set');
+t_set             = temp.t_set;
+%bound_local       = temp.bound_local;
+%bound_distributed = temp.bound_distributed;
+%bound_exact       = temp.bound_exact;
 
-% 从第一个文件读取公共时间轴和误差上界
-FirstFile = fullfile(SaveFolderName, [SimulationModes{1}, '.mat']);
-temp_data = load(FirstFile, 't_set', 'bound_local', 'bound_distributed', 'bound_exact');
-t_set          = temp_data.t_set;
-bound_local    = temp_data.bound_local;
-bound_distributed = temp_data.bound_distributed;
-bound_exact    = temp_data.bound_exact;
-
-% 读取所有模式的跟踪误差
-TrackingError_matrix = zeros(NumModes, numel(t_set));
-for ModeNr = 1:NumModes
-    DataFile = fullfile(SaveFolderName, [SimulationModes{ModeNr}, '.mat']);
-    d = load(DataFile, 'TrackingError_vector');
-    TrackingError_matrix(ModeNr, :) = d.TrackingError_vector;
+%Err_Test     = zeros(N, numel(t_set));
+Err_Inducing = zeros(N, numel(t_set));
+for m = 1:N
+    d1 = load(fullfile(SaveFolder_Test,     [AllModes{m},'.mat']),'TrackingError_vector');
+    d2 = load(fullfile(SaveFolder_Inducing, [AllModes{m},'.mat']),'TrackingError_vector');
+    Err_Test(m,:)     = d1.TrackingError_vector;
+    Err_Inducing(m,:) = d2.TrackingError_vector;
 end
 
-%% 4. 汇总表格：终端误差 & 平均误差
-fprintf('\n');
-fprintf('============================================================\n');
-fprintf('  GP Aggregation Method Comparison (masked inducing-point)\n');
-fprintf('============================================================\n');
-fprintf('  %-20s  %12s\n', 'Method', 'Final ||e||');
-fprintf('  %-20s  %12s\n', '------', '-----------');
-
-% 只统计前5种masked方法
-for ModeNr = 1:5
-    err = TrackingError_matrix(ModeNr, :);
-    fprintf('  %-20s  %12.4f\n', SimulationModes{ModeNr}, err(end));
+%% 3. plot
+fprintf('\n%s\n', repmat('=',1,52));
+fprintf('  %-10s  %16s  %16s\n','Method','Test Final||e||','Inducing Final||e||');
+fprintf('  %-10s  %16s  %16s\n','------','---------------','-------------------');
+for m = 1:numel(Modes_5)
+    fprintf('  %-10s  %16.4f  %16.4f\n', AllModes{m}, ...      
+    Err_Inducing(m,end));
+    %Err_Test(m,end));
 end
-fprintf('  %-20s  %12s\n', '------', '-----------');
-for ModeNr = 6:NumModes
-    err = TrackingError_matrix(ModeNr, :);
-    fprintf('  %-20s  %12.4f\n', SimulationModes{ModeNr}, err(end));
+fprintf('  %s\n', repmat('-',1,48));
+for m = numel(Modes_5)+1:N
+     fprintf('  %-10s  %16.4f  %16.4f\n', AllModes{m}, ...      
+      Err_Inducing(m,end));
+        %Err_Test(m,end), Err_Inducing(m,end));
 end
-fprintf('============================================================\n\n');
+fprintf('%s\n\n', repmat('=',1,52));
 
-%% 5. 绘图
-figure('Color','w','Position',[100 100 750 580]);
-t_start = t_set(1);
-t_end   = t_set(end);
+%{
+%% 4. 图1: 测试点模式对比
+colors = {[0.0,0.45,0.74],[0.85,0.33,0.10],[0.47,0.67,0.19],...
+          [0.63,0.08,0.18],[0.93,0.69,0.13],[0.5,0.5,0.5],[0,0,0]};
+styles  = {'-','-','-','-','-','--',':'};
+lw      = [1.8,1.8,1.8,1.8,1.8,1.5,1.5];
+LegendNames = {'PoE','gPoE','MoE','BCM','rBCM','Local','Exact'};
+t_start = t_set(1); t_end = t_set(end);
 
-% 线型/颜色配置：5种masked方法用实线，基线用虚线
-colors = {[0.0  0.45 0.74],  ... % poe    - blue
-          [0.85 0.33 0.10],  ... % gpoe   - orange
-          [0.47 0.67 0.19],  ... % moe    - green
-          [0.63 0.08 0.18],  ... % bcm    - dark red
-          [0.93 0.69 0.13],  ... % rbcm   - yellow
-          [0.5  0.5  0.5 ],  ... % local  - gray
-          [0.0  0.0  0.0 ]};    % exact  - black
-styles  = {'-', '-', '-', '-', '-', '--', ':'};
-lw      = [1.8, 1.8, 1.8, 1.8, 1.8, 1.5, 1.5];
-
-LegendNames = {'PoE (masked)', 'gPoE (masked)', 'MoE (masked)', ...
-               'BCM (masked)', 'rBCM (masked)', 'Local', 'Exact'};
-
-% 上图: ||e|| (log scale)
-subplot(2,1,1);
+figure('Color','w','Position',[50 100 700 520]);
+%subplot(2,1,1); 
 hold on; grid on; box on;
-set(gca, 'YScale','log', 'FontSize',11, 'FontName','Times New Roman');
-for ModeNr = 1:NumModes
-    plot(t_set, TrackingError_matrix(ModeNr,:), ...
-        'Color', colors{ModeNr}, 'LineStyle', styles{ModeNr}, ...
-        'LineWidth', lw(ModeNr));
+set(gca,'YScale','log','FontSize',11,'FontName','Times New Roman');
+for m = 1:N
+    plot(t_set,Err_Test(m,:),'Color',colors{m},'LineStyle',styles{m},'LineWidth',lw(m));
 end
-ylabel('$\|e\|$', 'Interpreter','latex', 'FontSize',13);
-xlim([t_start, t_end]);
-legend(LegendNames, 'Location','northeast', 'FontSize',9, ...
-       'NumColumns', 2);
-title('Tracking Error: 5 Masked GP Aggregation Methods', ...
-      'FontSize',12, 'FontName','Times New Roman');
-set(gca, 'XTickLabel', []);
+ylabel('$\|e\|$','Interpreter','latex','FontSize',13);
+title('Test-Point Aggregation (DAC)','FontSize',12,'FontName','Times New Roman');
+legend(LegendNames,'Location','northeast','FontSize',9,'NumColumns',2);
+xlim([t_start,t_end]); set(gca,'XTickLabel',[]);
 
-% 下图: 误差上界 v(t)
-subplot(2,1,2);
+%subplot(2,1,2); hold on; grid on; box on;
+set(gca,'FontSize',11,'FontName','Times New Roman');
+%plot(t_set,bound_local,'k-','LineWidth',1.5,'DisplayName','v(t) local');
+%plot(t_set,bound_distributed,'r-','LineWidth',1.5,'DisplayName','v(t) distributed');
+%plot(t_set,bound_exact,'b--','LineWidth',1.5,'DisplayName','v(t) exact');
+%ylabel('$v(t)$','Interpreter','latex','FontSize',13);
+%xlabel('$t$','Interpreter','latex','FontSize',13);
+xlim([t_start,t_end]); legend('Location','northeast','FontSize',10);
+saveas(gcf,fullfile(SaveFolder_Test,'Test_Point_Comparison.fig'));
+saveas(gcf,fullfile(SaveFolder_Test,'Test_Point_Comparison.png'));
+%}
+
+
+%% 5. 图2: 诱导点模式对比
+figure('Color','w','Position',[800 100 700 520]);
 hold on; grid on; box on;
-set(gca, 'FontSize',11, 'FontName','Times New Roman');
-plot(t_set, bound_local,       'k-',  'LineWidth',1.5, 'DisplayName','v(t) local bound');
-plot(t_set, bound_distributed, 'r-',  'LineWidth',1.5, 'DisplayName','v(t) distributed bound');
-plot(t_set, bound_exact,       'b--', 'LineWidth',1.5, 'DisplayName','v(t) exact bound');
-ylabel('$v(t)$', 'Interpreter','latex', 'FontSize',13);
-xlabel('$t$',    'Interpreter','latex', 'FontSize',13);
-xlim([t_start, t_end]);
-legend('Location','northeast', 'FontSize',10);
-
-saveas(gcf, fullfile(SaveFolderName, 'Aggregation_Comparison.fig'));
-saveas(gcf, fullfile(SaveFolderName, 'Aggregation_Comparison.png'));
-fprintf('Plot saved to %s\n', SaveFolderName);
+set(gca,'YScale','log','FontSize',11,'FontName','Times New Roman');
+for m = 1:N
+    plot(t_set,Err_Inducing(m,:),'Color',colors{m},'LineStyle',styles{m},'LineWidth',lw(m));
+end
+ylabel('$\|e\|$','Interpreter','latex','FontSize',13);
+title('Inducing-Point Aggregation (DAC)','FontSize',12,'FontName','Times New Roman');
+legend(LegendNames,'Location','northeast','FontSize',9,'NumColumns',2);
+xlim([t_start,t_end]); set(gca,'XTickLabel',[]);
+saveas(gcf,fullfile(SaveFolder_Inducing,'Inducing_Point_Comparison.fig'));
+fprintf('所有图已保存。\n');
