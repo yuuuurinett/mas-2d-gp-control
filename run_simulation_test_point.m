@@ -139,7 +139,7 @@ for k = 1:numel(t_set)
         [CurrentTime, CurrentTime+t_step], AgentState_matrix(:), opts);
     AgentState_matrix = reshape(x_output(end,:)', x_dim, AgentQuantity);
     t_ode = t_ode + toc(tic_ode);
-    fprintf('t = %6.4f\n', CurrentTime);
+    %fprintf('t = %6.4f\n', CurrentTime);
 end
 fprintf('Mode: %s done, total=%.2fs, GP=%.2fs, ODE=%.2fs\n', CurrentMode, toc, t_gp, t_ode);
 
