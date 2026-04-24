@@ -1,4 +1,5 @@
 function main_BatchTest(mode, framework)
+rng(0);
 
 Modes_dac      = {'poe','gpoe','moe','bcm','rbcm'};
 Modes_ac       = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};

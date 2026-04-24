@@ -2,22 +2,6 @@ function [MaskedGP, Zeta_vector] = gp_masked_aggregation_update( ...
     P, Zeta_vector, L, ...
     Kappa_P, AgentQuantity, NumInducingPoints, TimeStep, ...
     InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, method, p_dim)
-%  Inputs:
-%    P          : p_dim x AgentQuantity x M  (from gp_masked_aggregation_init)
-%    Zeta_vector: p_dim x AgentQuantity x M  (DAC state, updated in-place)
-%    L          : AgentQuantity x AgentQuantity Laplacian
-%    Kappa_P    : DAC gain κ
-%    AgentQuantity, NumInducingPoints, TimeStep
-%    InducingPoints_Coordinates : x_dim x M
-%    SigmaF, SigmaL             : GP hyperparameters for rebuilt GPs
-%    x_dim                      : input dimension
-%    method                     : string {'poe','gpoe','moe','bcm','rbcm'}
-%    p_dim                      : 4 or 6 (from init)
-%
-%  Outputs:
-%    MaskedGP    : cell(AgentQuantity,1), each a LocalGP_MultiOutput built
-%                  from the fused inducing-point predictions
-%    Zeta_vector : updated DAC state (p_dim x AgentQuantity x M)
 
 method  = lower(method);
 M       = NumInducingPoints;
@@ -41,7 +25,7 @@ if TimeStep > 0
     end
 end
 
-%% Step 2: Recover fused mean µ̃ at each inducing point for each agent
+%% Step 2: compute xi
 
 Xi_all = P - Zeta_vector;   % p_dim x AgentQuantity x M
 
@@ -52,7 +36,7 @@ switch method
         num2 = squeeze(Xi_all(3, :, :));
         den2 = squeeze(Xi_all(4, :, :));
 
-        phi1 = num1 ./ den1;   % AgentQuantity x M, fused µ̃ for dim 1
+        phi1 = num1 ./ den1;   % AgentQuantity x M
         phi2 = num2 ./ den2;
 
     case 'bcm'
@@ -66,7 +50,7 @@ switch method
         phi2 = num2 ./ (den2 + prior_correction);
 
     case 'rbcm'
-        % P layout: [N*β1*mu1/var1, N*β1/var1, N*β1, N*β2*mu2/var2, N*β2/var2, N*β2]
+       
         num1  = squeeze(Xi_all(1, :, :));
         den1  = squeeze(Xi_all(2, :, :));
         beta1 = squeeze(Xi_all(3, :, :));
@@ -78,7 +62,7 @@ switch method
         phi2 = num2 ./ (den2 + (1 - beta2) / prior_var);
 end
 
-%% Step 3: Rebuild one LocalGP per agent from fused inducing-point predictions
+%% Step 3: masked GP
 MaskedGP = cell(AgentQuantity, 1);
 for AgentNr = 1:AgentQuantity
     Y_agent = [phi1(AgentNr, :); phi2(AgentNr, :)];  % 2 x M

@@ -2,8 +2,6 @@ function [P, p_dim] = gp_masked_aggregation_init( ...
     LocalGP_set, AgentQuantity, ...
     NumInducingPoints, InducingPoints_Coordinates, method)
 %    InducingPoints_Coordinates : x_dim x M
-%    method : one of {'poe','gpoe','moe','bcm','rbcm'}
-
 %    P      : p_dim x AgentQuantity x M
 %    p_dim  : dimension of P's first axis (4 or 6)
 
