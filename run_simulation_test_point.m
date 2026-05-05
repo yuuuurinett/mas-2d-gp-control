@@ -1,150 +1,170 @@
-function run_simulation_test_point(CurrentMode, SaveFolderName, SaveFileName)
+function [TrackingError_vector, t_set] = run_simulation_test_point(CurrentMode, SaveFolderName, SaveFileName)
+%function run_simulation_test_point(CurrentMode, SaveFolderName, SaveFileName)
 rng(0);
-%% 1. Topology
-AgentQuantity = 6;
-AgentConnectionConfigurationSet = {
-    {1,2,'Directed',0.5};
-    {1,6,'Directed',0.5};
-    {2,3,'Directed',0.5};
-    {2,4,'Directed',0.5};
-    {3,2,'Directed',0.5}; 
-    {3,1,'Directed',0.5};
-    {4,3,'Directed',0.5}; 
-    {4,5,'Directed',0.5};
-    {5,6,'Directed',0.5}; 
-    {5,4,'Directed',0.5};
-    {6,5,'Directed',0.5}; 
-    {6,1,'Directed',0.5}
-};
-LeaderQuantity = 1;
-AgentLeaderConnectionConfigurationSet = {
-    {'Leader',1,'Agent',1,1}; {'Leader',1,'Agent',4,1}
-};
-MultiAgentSystem = MultiAgentSystem_Class(AgentQuantity, LeaderQuantity);
-MultiAgentSystem.Agent_Topology.addConnectionSet(AgentConnectionConfigurationSet);
-MultiAgentSystem.Agent_Topology.check_Connectivity(true);
-MultiAgentSystem.Agent_Leader_Topology.addConnectionSet(AgentLeaderConnectionConfigurationSet);
-MultiAgentSystem.get_ExtendedTopology;
-L = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
-B = MultiAgentSystem.Agent_Leader_Topology.ConnectionMatrix;
-
-%% 2. Time
-t_start = 0; t_end = 4; t_step = 0.01;
-t_set = t_start:t_step:t_end;
+%% 1. System Parameters
 SystemOrder = 2; q_dim = 2; x_dim = q_dim * SystemOrder;
 m1 = 1; m2 = 1; L1 = 1; L2 = 1; g = 9.8;
+AgentQuantity = 6; LeaderQuantity = 1;
 
-%% 3. Reference Trajectory
-x_trajectory_set = nan(x_dim, numel(t_set));
-x_trajectory_set(1,:) = sin(0.5*t_set);
-x_trajectory_set(2,:) = cos(0.5*t_set);
-x_trajectory_set(3,:) = 0.5*cos(0.5*t_set);
-x_trajectory_set(4,:) = -0.5*sin(0.5*t_set);
+%% 2. Topology 
+MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(AgentQuantity, LeaderQuantity);
+L = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
+B = MultiAgentSystem.Agent_Leader_Topology.ConnectionMatrix(:,1);
+%% 3. Controller Parameters
+c = 10;
+lambda_set = [1; 1];
+lambda_n = lambda_set(end);
+lambda_vector = lambda_set(1:SystemOrder-1);
+Lambda = [zeros(SystemOrder-2,1), eye(SystemOrder-2);
+          -lambda_set(1)/lambda_n, -lambda_set(2:end-1)/lambda_n];
+Qes = eye(SystemOrder-1);
+Pes = care(Lambda, [], Qes);
+q   = (L + diag(B)) \ ones(AgentQuantity,1);
+Pr  = diag(1 ./ q);
+Qr  = Pr*(L+diag(B)) + (L+diag(B))'*Pr;
+t_vec = [zeros(SystemOrder-2,1); 1/lambda_n];
+Phi = Pr * kron(lambda_vector'*t_vec, eye(AgentQuantity));
+Psi = Pr * kron(lambda_vector'*Lambda, eye(AgentQuantity)) + ...
+      kron(t_vec'*Pes, eye(AgentQuantity));
+Qz  = [c*lambda_n*Qr - 2*Phi, -Psi; -Psi', kron(Qes,eye(AgentQuantity))];
+if ~(all(real(eig(Qz))>0) && all(real(eig(Lambda))<0))
+    error('Controller is not stable!');
+end
 
-%% 4. Local GPs
+%% 4. Time
+t_start = 0; t_end = 4; t_step = 0.01;
+t_set = t_start:t_step:t_end;
+
+%% 5. Reference Trajectory 
+[xl_set, xlr_set, ~] = Manipulator_2D_2DoF_LeaderDynamics(t_set, L1);
+s_all_set  = nan(x_dim*AgentQuantity, numel(t_set));
+sr_all_set = nan(q_dim*AgentQuantity, numel(t_set));
+for AgentNr = 1:AgentQuantity
+    [s_all_set((AgentNr-1)*x_dim+(1:x_dim),:), ...
+     sr_all_set((AgentNr-1)*q_dim+(1:q_dim),:)] = ...
+        Manipulator_2D_2DoF_RelativePositionDynamics(t_set, AgentNr, AgentQuantity);
+end
+
+%% 6. Local GPs
 SigmaF = 1; SigmaL = 0.5*ones(x_dim,1);
-GP_tau = 1e-8; GP_delta = 0.1; y_dim = q_dim;
+GP_tau = 1e-8; GP_delta = 0.01; y_dim = q_dim;
 DomainScale = 1.5;
-Local_X_min = DomainScale*[-1,-1,-1,-1;-1,-1,0,0;0,0,0,0;0,0,-1,-1;-1,0,-1,0;0,-1,0,-1];
-Local_X_max = DomainScale*[0,0,0,0;0,0,1,1;1,1,1,1;1,1,0,0;0,1,0,1;1,0,1,0];
-OfflineDataQuantity = 100;
-SigmaN = 0.1;
+MaxDataQuantity_set     = 400*ones(AgentQuantity,1);
+OfflineDataQuantity_set = MaxDataQuantity_set;
+SigmaN_set = 0.05*ones(AgentQuantity,1);
+
 
 LocalGP_set = cell(AgentQuantity,1);
 for n = 1:AgentQuantity
-    LocalGP_set{n} = LocalGP_MultiOutput(x_dim, y_dim, 100, SigmaN, SigmaF, SigmaL);
-    Data_mu = (Local_X_max(n,:) + Local_X_min(n,:)) / 2;
-    Data_Le = (Local_X_max(n,:) - Local_X_min(n,:)) / 2;
-    X_in = 2*(rand(x_dim,OfflineDataQuantity)-0.5) .* repmat(Data_Le',[1,OfflineDataQuantity]) + Data_mu';
-    Y_in = zeros(y_dim, OfflineDataQuantity);
-    for d = 1:OfflineDataQuantity
-        Y_in(:,d) = Manipulator_2D_2DoF_UnknownDynamics(X_in(:,d));
-    end
-    Y_in = Y_in + SigmaN * randn(size(Y_in));
+    LocalGP_set{n} = LocalGP_MultiOutput(x_dim, y_dim, ...
+        MaxDataQuantity_set(n), SigmaN_set(n), SigmaF, SigmaL);   
+    X_in = 2*(rand(x_dim, OfflineDataQuantity_set(n))-0.5)*DomainScale;
+    Y_in = Manipulator_2D_2DoF_UnknownDynamics(X_in);
+    Y_in = Y_in + SigmaN_set(n)*randn(size(Y_in));
     LocalGP_set{n}.add_Alldata(X_in, Y_in);
-    LocalGP_set{n}.tau = GP_tau; LocalGP_set{n}.delta = GP_delta;
-    LocalGP_set{n}.xMax = max(X_in,[],2); LocalGP_set{n}.xMin = min(X_in,[],2);
+    LocalGP_set{n}.tau = GP_tau;    
 end
 
-%% 5. Setup
-rng(0);
-AgentInitialState_matrix = rand(4, AgentQuantity) - 0.5;
-lambda_set = [7/4; 1];
-Kappa_C = 100;
-AdjMatrix  = MultiAgentSystem.Agent_Topology.AdjacencyMatrix;
-NeighbourSet = MultiAgentSystem.Agent_Topology.NeighbourSet;
-TrackingError_vector = zeros(1, numel(t_set));
+%% 7. Setup
+Kappa_P = 100;
+AdjMatrix_L = MultiAgentSystem.Agent_Topology.AdjacencyMatrix;
+L_lap = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 
-%% 6. Mode init
-Kappa_P = 1000;
+% DAC Zeta 初始化
 switch lower(CurrentMode)
-    case {'poe','gpoe','moe','bcm'}
+    case {'poe','gpoe','moe','bcm','local','exact'}
         Zeta_vector = zeros(4, AgentQuantity);
     case 'rbcm'
         Zeta_vector = zeros(6, AgentQuantity);
-    otherwise
-        Zeta_vector = zeros(4, AgentQuantity);
 end
 
-%% 7. Control Loop
-tic; 
-t_gp = 0; 
-t_ode = 0;
-AgentState_matrix = AgentInitialState_matrix;
+%% 8. Initial State
+%rng(0);
+x_all = rand(x_dim*AgentQuantity, 1);
+x_all_set = nan(x_dim*AgentQuantity, numel(t_set));
+x_all_set(:,1) = x_all;
+vartheta_all_set = nan(x_dim*AgentQuantity, numel(t_set));
+vartheta_all_set(:,1) = x_all - s_all_set(:,1) - kron(ones(AgentQuantity,1), xl_set(:,1));
 
-for k = 1:numel(t_set)
-    CurrentTime = t_set(k);
-    LeaderState_vector = x_trajectory_set(:, k);
-    TrackingError_vector(1,k) = norm(AgentState_matrix(:) - repmat(LeaderState_vector, AgentQuantity, 1));
-    if k == numel(t_set), break; end
+f_hat_matrix = zeros(y_dim, AgentQuantity);
+TrackingError_vector = zeros(1, numel(t_set));
 
-    Phi_Xi_vector = zeros(q_dim, AgentQuantity);
-    tic_gp = tic;
+%% 9. Control Loop
+tic;
+for t_Nr = 1:numel(t_set)-1
+    t = t_set(t_Nr);
+    x_l_r      = xlr_set(:, t_Nr);
+    x_all      = x_all_set(:, t_Nr);
+    x_all_matrix = reshape(x_all, x_dim, AgentQuantity);
+    x_all_cell = ET_MAS_GP_Leader_vector2cell(x_all, AgentQuantity, 1);
+    s_all      = s_all_set(:, t_Nr);
+    s_r_all    = sr_all_set(:, t_Nr);
+    s_r_cell   = ET_MAS_GP_Leader_vector2cell(s_r_all, AgentQuantity, 1);
+    x_tilde_all = x_all - s_all;
+    x_tilde_cell = ET_MAS_GP_Leader_vector2cell(x_tilde_all, AgentQuantity, SystemOrder);
+    vartheta_all = vartheta_all_set(:, t_Nr);
+    vartheta_cell = ET_MAS_GP_Leader_vector2cell(vartheta_all, AgentQuantity, SystemOrder);
 
+    TrackingError_vector(t_Nr) = norm(vartheta_all);
+
+    [phi_cell, ~, ~] = Manipulator_2D_2DoF_ConsensusLaw( ...
+        vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
+
+    % GP 聚合预测
+    AgentState_matrix = x_all_matrix;
     switch lower(CurrentMode)
         case 'poe'
-            [Phi_Xi_vector, Zeta_vector] = gp_test_poe( ...
-                AgentState_matrix, LocalGP_set, L, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            [Phi_Xi, Zeta_vector] = gp_test_poe( ...
+                AgentState_matrix, LocalGP_set, L_lap, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            f_hat_matrix = Phi_Xi;
         case 'gpoe'
-            [Phi_Xi_vector, Zeta_vector] = gp_test_gpoe( ...
-                AgentState_matrix, LocalGP_set, L, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            [Phi_Xi, Zeta_vector] = gp_test_gpoe( ...
+                AgentState_matrix, LocalGP_set, L_lap, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            f_hat_matrix = Phi_Xi;
         case 'moe'
-            [Phi_Xi_vector, Zeta_vector] = gp_test_moe( ...
-                AgentState_matrix, LocalGP_set, L, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            [Phi_Xi, Zeta_vector] = gp_test_moe( ...
+                AgentState_matrix, LocalGP_set, L_lap, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            f_hat_matrix = Phi_Xi;
         case 'bcm'
-            [Phi_Xi_vector, Zeta_vector] = gp_test_bcm( ...
-                AgentState_matrix, LocalGP_set, L, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            [Phi_Xi, Zeta_vector] = gp_test_bcm( ...
+                AgentState_matrix, LocalGP_set, L_lap, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+           
+            f_hat_matrix = Phi_Xi;
         case 'rbcm'
-            [Phi_Xi_vector, Zeta_vector] = gp_test_rbcm( ...
-                AgentState_matrix, LocalGP_set, L, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            [Phi_Xi, Zeta_vector] = gp_test_rbcm( ...
+                AgentState_matrix, LocalGP_set, L_lap, Kappa_P, AgentQuantity, Zeta_vector, t_step);
+            f_hat_matrix = Phi_Xi;
         case 'local'
             for n = 1:AgentQuantity
                 [mu_n,~] = LocalGP_set{n}.predict(AgentState_matrix(:,n));
-                Phi_Xi_vector(:,n) = mu_n;
+                %f_true = Manipulator_2D_2DoF_UnknownDynamics(AgentState_matrix(:,n));               
+                mu_n = max(-30, min(30, mu_n));
+                f_hat_matrix(:,n) = mu_n;
             end
         case 'exact'
             for n = 1:AgentQuantity
-                Phi_Xi_vector(:,n) = Manipulator_2D_2DoF_UnknownDynamics(AgentState_matrix(:,n));
+                f_hat_matrix(:,n) = Manipulator_2D_2DoF_UnknownDynamics(AgentState_matrix(:,n));
             end
     end
-    t_gp = t_gp + toc(tic_gp);
+    u_cell = Manipulator_2D_2DoF_get_u_cell(x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
 
-    MultiAgent_Dynamics_Handle = @(t,x) multi_agent_dynamics( ...
-        t, x, Phi_Xi_vector, AdjMatrix, NeighbourSet, B, lambda_set, ...
-        Kappa_C, AgentQuantity, SystemOrder, q_dim, L1, L2, m1, m2);
+    [~, x_all_temp] = ode45( ...
+        @(t,x) Manipulator_2D_2DoF_MultiAgent_DynamicFunction(t, x, u_cell, L1, L2, m1, m2), ...
+        [t, t+t_step], x_all);
+    x_all_next = x_all_temp(end,:)';
+    x_all_set(:, t_Nr+1) = x_all_next;
+    vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
+        kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
 
-    tic_ode = tic;
-    opts = odeset('RelTol',1e-6,'AbsTol',1e-6);
-    [~, x_output] = ode45(MultiAgent_Dynamics_Handle, ...
-        [CurrentTime, CurrentTime+t_step], AgentState_matrix(:), opts);
-    AgentState_matrix = reshape(x_output(end,:)', x_dim, AgentQuantity);
-    t_ode = t_ode + toc(tic_ode);
-    %fprintf('t = %6.4f\n', CurrentTime);
+ fprintf('t = %6.4f\n', t);
 end
-fprintf('Mode: %s done, total=%.2fs, GP=%.2fs, ODE=%.2fs\n', CurrentMode, toc, t_gp, t_ode);
+TrackingError_vector(end) = norm(vartheta_all_set(:,end));
+fprintf('Mode: %s done, total=%.2fs\n', CurrentMode, toc);
 
-%% 8. Save
-if ~exist(SaveFolderName,'dir'), mkdir(SaveFolderName); end
-save(fullfile(SaveFolderName,[SaveFileName,'.mat']), ...
-    't_set','TrackingError_vector','CurrentMode');
+%% 10. Save
+if nargin >= 3
+    if ~exist(SaveFolderName,'dir'), mkdir(SaveFolderName); end
+    save(fullfile(SaveFolderName,[SaveFileName,'.mat']), ...
+        't_set','TrackingError_vector','CurrentMode');
+end
 end

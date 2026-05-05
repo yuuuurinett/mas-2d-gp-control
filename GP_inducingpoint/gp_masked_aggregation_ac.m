@@ -1,6 +1,6 @@
 function MaskedGP = gp_masked_aggregation_ac( ...
-    P, InducingPoints_Coordinates, SigmaF, SigmaL, ...
-    x_dim, AgentQuantity, NumInducingPoints, method, p_dim)
+    LocalGP_set, InducingPoints_Coordinates, SigmaF, SigmaL, ...
+    x_dim, AgentQuantity, NumInducingPoints, method)
 %% gp_masked_aggregation_ac
 
 method    = lower(method);
@@ -8,48 +8,70 @@ M         = NumInducingPoints;
 y_dim     = 2;
 prior_var = SigmaF^2;
 
-%% AC: Xi = mean(P, 2) broadcast to all agents
-Xi_mean = mean(P, 2);                          % p_dim x 1
-Xi_all  = repmat(Xi_mean, 1, AgentQuantity);   % p_dim x AgentQuantity
-%% Decode fused mean (same formulas as gp_masked_aggregation_update)
-switch method
-    case {'poe', 'gpoe', 'moe'}
-        num1 = squeeze(Xi_all(1, :, :));  % AgentQuantity x M
-        num2 = squeeze(Xi_all(2, :, :));
-        den1 = squeeze(Xi_all(3, :, :));
-        den2 = squeeze(Xi_all(4, :, :));
+phi1 = zeros(AgentQuantity, M);  % AgentQuantity x M
+phi2 = zeros(AgentQuantity, M);
 
-        phi1 = num1 ./ den1;
-        phi2 = num2 ./ den2;
+for m = 1:M
+    x_m = InducingPoints_Coordinates(:, m);
 
-    case 'bcm'
-        num1 = squeeze(Xi_all(1, :, :));
-        num2 = squeeze(Xi_all(2, :, :));
-        den1 = squeeze(Xi_all(3, :, :));
-        den2 = squeeze(Xi_all(4, :, :));
+    % Collect local predictions from all agents
+    mu_all  = zeros(AgentQuantity, y_dim);
+    var_all = zeros(AgentQuantity, y_dim);
+    for n = 1:AgentQuantity
+        [mu_n, var_n]  = LocalGP_set{n}.predict(x_m);
+        mu_all(n, :)  = mu_n';
+        var_all(n, :) = var_n';
+    end
 
-        prior_correction = (1 - AgentQuantity) / prior_var;
-        phi1 = num1 ./ (den1 + prior_correction);
-        phi2 = num2 ./ (den2 + prior_correction);
+    % Apply aggregation formula directly (no DAC needed)
+for d = 1:y_dim    
+    mu_d = mu_all(:, d);
+    var_d = var_all(:, d);
+        switch method
+            case 'poe'
+                prec = sum(1 ./ var_d);
+                mu_fused = sum(mu_d ./ var_d) / prec;
 
-    case 'rbcm'
-        % P layout: [N*β1*mu1/var1, N*β1/var1, N*β1, N*β2*mu2/var2, N*β2/var2, N*β2]
-        num1  = squeeze(Xi_all(1, :, :));
-        den1  = squeeze(Xi_all(2, :, :));
-        beta1 = squeeze(Xi_all(3, :, :));
-        num2  = squeeze(Xi_all(4, :, :));
-        den2  = squeeze(Xi_all(5, :, :));
-        beta2 = squeeze(Xi_all(6, :, :));
+            case 'gpoe'
+                beta = max(eps, 0.5 * (log(prior_var) - log(var_d)));
+                prec = sum(beta ./ var_d);
+                mu_fused = sum(beta .* mu_d ./ var_d) / prec;
 
-        phi1 = num1 ./ (den1 + (1 - beta1) / prior_var);
-        phi2 = num2 ./ (den2 + (1 - beta2) / prior_var);
+            case 'moe'
+                mu_fused = mean(mu_d);
+
+            case 'bcm'
+                prec = sum(1 ./ var_d) + (1 - AgentQuantity) / prior_var;
+                if prec > 1e-2
+                    mu_fused = sum(mu_d ./ var_d) / prec;
+                else
+                    mu_fused = 0; 
+                end
+                %mu_fused = sum(mu_d ./ var_d) / prec;
+
+            case 'rbcm'
+                beta = max(eps, 0.5 * (log(prior_var) - log(var_d)));
+                prec = sum(beta ./ var_d) + (1 - sum(beta)) / prior_var;
+                if prec > 1e-2
+                    mu_fused = sum(beta .* mu_d ./ var_d) / prec;
+                else
+                    mu_fused = 0; 
+                end
+        end
+
+        if d == 1
+            phi1(:, m) = mu_fused;
+        else
+            phi2(:, m) = mu_fused;
+        end
 end
 
-%% Rebuild one LocalGP per agent
+
+%% Rebuild one MaskedGP per agent from fused inducing-point labels
 MaskedGP = cell(AgentQuantity, 1);
 for AgentNr = 1:AgentQuantity
     Y_agent = [phi1(AgentNr, :); phi2(AgentNr, :)];
-    MaskedGP{AgentNr} = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-6, SigmaF, SigmaL);
+    MaskedGP{AgentNr} = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-4, SigmaF, SigmaL);
     MaskedGP{AgentNr}.add_Alldata(InducingPoints_Coordinates, Y_agent);
 end
 end

@@ -10,6 +10,6 @@ dry = dr(2,:);
 
 f_1 = 5 * sin(rx) + 3 * cos(rx) + drx.^2 + 6;
 f_2 = 3 * cos(ry) + 5 * sin(ry) + dry.^2 + 10;
-f = [f_1; f_2];
+f = 0.5 * [f_1; f_2];
 
 end 

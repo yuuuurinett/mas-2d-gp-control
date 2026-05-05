@@ -46,8 +46,17 @@ switch method
         den2 = squeeze(Xi_all(4, :, :));
  
         prior_correction = (1 - AgentQuantity) / prior_var;
-        phi1 = num1 ./ (den1 + prior_correction);
-        phi2 = num2 ./ (den2 + prior_correction);
+        den1_fused = den1 + prior_correction;
+        den2_fused = den2 + prior_correction;
+        
+        % 🌟 优雅回退：如果分母小于 0.01（极度不自信或过零），直接输出 0！
+        phi1 = zeros(size(num1));
+        phi2 = zeros(size(num2));
+        mask1 = den1_fused > 1e-2;
+        mask2 = den2_fused > 1e-2;
+        
+        phi1(mask1) = num1(mask1) ./ den1_fused(mask1);
+        phi2(mask2) = num2(mask2) ./ den2_fused(mask2);
 
     case 'rbcm'
        
@@ -58,15 +67,24 @@ switch method
         den2  = squeeze(Xi_all(5, :, :));
         beta2 = squeeze(Xi_all(6, :, :));
 
-        phi1 = num1 ./ (den1 + (1 - beta1) / prior_var);
-        phi2 = num2 ./ (den2 + (1 - beta2) / prior_var);
+        den1_fused = den1 + (1 - beta1) / prior_var;
+        den2_fused = den2 + (1 - beta2) / prior_var;
+        
+       
+        phi1 = zeros(size(num1));
+        phi2 = zeros(size(num2));
+        mask1 = den1_fused > 1e-2;
+        mask2 = den2_fused > 1e-2;
+        
+        phi1(mask1) = num1(mask1) ./ den1_fused(mask1);
+        phi2(mask2) = num2(mask2) ./ den2_fused(mask2);
 end
 
 %% Step 3: masked GP
 MaskedGP = cell(AgentQuantity, 1);
 for AgentNr = 1:AgentQuantity
     Y_agent = [phi1(AgentNr, :); phi2(AgentNr, :)];  % 2 x M
-    MaskedGP{AgentNr} = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-6, SigmaF, SigmaL);
+    MaskedGP{AgentNr} = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-4, SigmaF, SigmaL);
     MaskedGP{AgentNr}.add_Alldata(InducingPoints_Coordinates, Y_agent);
 end
 

@@ -23,8 +23,12 @@ Zeta_vector = reshape(Zeta_Output(end,:)', 4, AgentQuantity);
 % BCM decoder: prior correction (1-K)/σ₀²
 prior_correction = (1 - AgentQuantity) / prior_var;
 Xi = P - Zeta_vector;
-Phi_Xi_vector(1,:) = Xi(1,:) ./ (Xi(3,:) + prior_correction);
-Phi_Xi_vector(2,:) = Xi(2,:) ./ (Xi(4,:) + prior_correction);
+
+denom1 = Xi(3,:) + prior_correction;
+denom2 = Xi(4,:) + prior_correction;
+
+Phi_Xi_vector(1,:) = Xi(1,:) ./ denom1;
+Phi_Xi_vector(2,:) = Xi(2,:) ./ denom2;
 end
 
 %% compute zeta_dot

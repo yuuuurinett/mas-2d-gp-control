@@ -28,11 +28,30 @@ New_Consensus_Zeta_function = @(~, Zeta_vec) Compute_New_Consensus_Derivative( .
 [~, Zeta_Output] = ode45(New_Consensus_Zeta_function, [0, TimeStep], Zeta_vector(:));
 Zeta_vector = reshape(Zeta_Output(end,:)', 6, AgentQuantity);
 
-Xi_matrix = P_ReferenceSignal_matrix - Zeta_vector;
-Phi_Xi_vector(1,:) = Xi_matrix(1,:) ./ ...
-    (Xi_matrix(2,:) + (1 - Xi_matrix(3,:) / prior_variance));
-Phi_Xi_vector(2,:) = Xi_matrix(4,:) ./ ...
-    (Xi_matrix(5,:) + (1 - Xi_matrix(6,:) / prior_variance));
+Xi = P_ReferenceSignal_matrix - Zeta_vector;
+
+% dim1
+Xi_num1  = Xi(1,:);   % β1·μ1/σ1²
+Xi_den1  = Xi(2,:);   % β1/σ1²
+Xi_beta1 = Xi(3,:);   % β1
+
+% dim2  
+Xi_num2  = Xi(4,:);   % β2·μ2/σ2²
+Xi_den2  = Xi(5,:);   % β2/σ2²
+Xi_beta2 = Xi(6,:);   % β2
+
+denom1 = Xi_den1 + (1 - Xi_beta1) / prior_variance;
+denom2 = Xi_den2 + (1 - Xi_beta2) / prior_variance;
+
+% 完全 1:1 按照 rBCM 理论公式复刻
+denom1 = Xi_den1 + (1 - Xi_beta1) / prior_variance;
+denom2 = Xi_den2 + (1 - Xi_beta2) / prior_variance;
+
+Phi_Xi_vector(1,:) = Xi_num1 ./ denom1;
+Phi_Xi_vector(2,:) = Xi_num2 ./ denom2;
+
+
+
 end
 
 %%

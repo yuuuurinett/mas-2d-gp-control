@@ -276,7 +276,7 @@ for t_Nr = 1:numel(t_set)-1
 	end
 	end
 	%% Calculate Control Input
-	u_cell = Manipulator_2D_2DoF_get_u_cell(x_all_cell,phi_cell,f_hat_matrix,L1,L2,m1,m2);
+	u_cell = Manipulator_2D_2DoF_get_u_cell(x_all_cell,phi_cell,0 * f_hat_matrix,L1,L2,m1,m2);
 	u_all = ET_MAS_GP_Leader_cell2vector(u_cell,q_dim);
 	%% Simulation
 	[~,x_all_temp] = ode45( ...

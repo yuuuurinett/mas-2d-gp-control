@@ -25,8 +25,8 @@ Xi_matrix = P_ReferenceSignal - Zeta_vector;
 
 Phi_Xi_vector(1,:) = Xi_matrix(1,:) ./ Xi_matrix(3,:);
 Phi_Xi_vector(2,:) = Xi_matrix(2,:) ./ Xi_matrix(4,:);
-
-Xi_diff = sum(pdist(Xi_matrix', 'euclidean'));
+%fprintf('t step: max|phi|=%.2f\n', max(abs(Phi_Xi_vector(:))));
+%Xi_diff = sum(pdist(Xi_matrix', 'euclidean'));
 end
 
 %% compute zeta_dot

@@ -18,11 +18,12 @@ Force_Coordinate_Convertion_2 = L1 * sin(q1) * dq1^2 + L2 * sin(q1 + q2) * (dq1 
 Force_Coordinate_Convertion = [Force_Coordinate_Convertion_1; Force_Coordinate_Convertion_2];
 %%
 Mass_r = invT' * Mass_q * invT;
+Mass_r_safe = Mass_r + 1e-4 * eye(size(Mass_r));
 
 %%
-h = Mass_r \ (- invT' * Mass_q * invT * Force_Coordinate_Convertion - ...
+h = Mass_r_safe \ (- invT' * Mass_q * invT * Force_Coordinate_Convertion - ...
 	invT' * Force_q);
-g = Mass_r \ invT';
+g = Mass_r_safe \ invT';
 f = Manipulator_2D_2DoF_UnknownDynamics(x);
 
 end
