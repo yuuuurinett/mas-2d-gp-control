@@ -79,7 +79,6 @@ switch lower(CurrentMode)
 end
 
 %% 8. Initial State
-%rng(0);
 x_all = rand(x_dim*AgentQuantity, 1);
 x_all_set = nan(x_dim*AgentQuantity, numel(t_set));
 x_all_set(:,1) = x_all;
