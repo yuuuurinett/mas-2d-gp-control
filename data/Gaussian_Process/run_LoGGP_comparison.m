@@ -17,22 +17,22 @@ switch upper(DatasetName)
         tr = load('KIN40K_train.mat');
         te = load('KIN40K_test.mat');
         hp = load('KIN40K_Hyperparameter.mat');
-        train_x = tr.x;      train_y = tr.y;
-        test_x  = te.xtest;  test_y  = te.ytest;
+        X_all = [tr.x;      te.xtest];
+        Y_all = [tr.y;      te.ytest];
 
     case 'POL'
         tr = load(fullfile('POL', 'POL_train.mat'));
         te = load(fullfile('POL', 'POL_test.mat'));
         hp = load(fullfile('POL', 'POL_Hyperparameter.mat'));
-        train_x = tr.x;      train_y = tr.y;
-        test_x  = te.xtest;  test_y  = te.ytest;
+        X_all = [tr.x;      te.xtest];
+        Y_all = [tr.y;      te.ytest];
 
     case 'PUMADYN32NM'
         tr = load(fullfile('PUMADYN32NM', 'PUMADYN32NM_train.mat'));
         te = load(fullfile('PUMADYN32NM', 'PUMADYN32NM_test.mat'));
         hp = load(fullfile('PUMADYN32NM', 'PUMADYN32NM_Hyperparameter.mat'));
-        train_x = tr.x;      train_y = tr.y;
-        test_x  = te.xtest;  test_y  = te.ytest;
+        X_all = [tr.x;      te.xtest];
+        Y_all = [tr.y;      te.ytest];
 
     case 'SARCOS'
         tr = load(fullfile('SARCOS', 'SARCOS_train.mat'));
@@ -41,28 +41,22 @@ switch upper(DatasetName)
         hp.SigmaF = hp.SigmaF_set{1};
         hp.SigmaL = hp.SigmaL_set{1};
         hp.SigmaN = hp.SigmaN_set{1};
-        train_x = tr.sarcos_inv(:,1:21);       train_y = tr.sarcos_inv(:,22:28);
-        test_x  = te.sarcos_inv_test(:,1:21);  test_y  = te.sarcos_inv_test(:,22:28);
+        X_all = [tr.sarcos_inv(:,1:21);  te.sarcos_inv_test(:,1:21)];
+        Y_all = [tr.sarcos_inv(:,22:28); te.sarcos_inv_test(:,22:28)];
 
     otherwise
         error('未知数据集: %s', DatasetName);
 end
 
-%% 2. 与 run_dac_dataset.m 完全相同的数据划分方式
-% --- 官方 Train：随机采样 train_ratio% ---
-N_official_train = size(train_x, 1);
-n_train          = round(N_official_train * train_ratio);
-idx_train_all    = randperm(N_official_train);
-idx_train_select = idx_train_all(1 : n_train);
+%% 2. 随机划分
+N_all   = size(X_all, 1);
+idx_all = randperm(N_all);
+n_train = round(N_all * train_ratio);
 
-X_train = train_x(idx_train_select, :);
-Y_train = train_y(idx_train_select, :);
-
-% --- 官方 Test：打乱顺序 ---
-N_official_test  = size(test_x, 1);
-idx_test_shuffle = randperm(N_official_test);
-X_test = test_x(idx_test_shuffle, :);
-Y_test = test_y(idx_test_shuffle, :);
+X_train = X_all(idx_all(1:n_train),        :);
+Y_train = Y_all(idx_all(1:n_train),        :);
+X_test  = X_all(idx_all(n_train+1:end),    :);
+Y_test  = Y_all(idx_all(n_train+1:end),    :);
 
 [N_train, x_dim] = size(X_train);
 y_dim  = size(Y_train, 2);
@@ -71,20 +65,20 @@ X_eval = X_test(1:N_eval, :);
 Y_eval = Y_test(1:N_eval, :);
 Y_var_baseline = var(Y_eval);
 
-fprintf('Train(official): %d  Used Train: %d  Test(eval): %d  x_dim: %d  y_dim: %d\n', ...
-    N_official_train, N_train, N_eval, x_dim, y_dim);
+fprintf('Total: %d  Train: %d  Test(eval): %d  x_dim: %d  y_dim: %d\n', ...
+    N_all, N_train, N_eval, x_dim, y_dim);
 fprintf('SigmaF=%.4f  SigmaN=%.4f\n', hp.SigmaF, hp.SigmaN);
 
 %% 3. 参数
 Max_LocalGP_DataQuantity = 100;
-Max_LocalGP_Quantity     = 100;
+Max_LocalGP_Quantity     = 500;
 methods = {'MOE', 'GPOE'};
 
 %% 4. 保存路径
 SaveFolder = fullfile('Result', 'Dataset', DatasetName);
 if ~exist(SaveFolder, 'dir'), mkdir(SaveFolder); end
 
-results = zeros(numel(methods), 5);  % [SMSE, RMSE, NLPD, Train_T, Test_T]
+results = zeros(numel(methods), 5);  % [SMSE, RMSE, NLPD, Train_T(ms/pt), Test_T(ms/pt)]
 
 %% 5. 训练并评估
 for method_index = 1:numel(methods)
@@ -96,6 +90,10 @@ for method_index = 1:numel(methods)
         Max_LocalGP_DataQuantity, Max_LocalGP_Quantity, ...
         x_dim, y_dim, hp.SigmaN, hp.SigmaF, hp.SigmaL);
     log_gp.AggregationMethod = method;
+    
+    % [核心修改 1]：遵循师兄建议，将重叠率从 0 调至 0.05 (5%)。
+    % 这样可以激活边界处多个专家的联合方差评估，体现 MOE/GPOE 的真实聚合价值
+    log_gp.o_ratio = 0.05; 
 
     tic;
     for n = 1:N_train
@@ -105,12 +103,20 @@ for method_index = 1:numel(methods)
         end
     end
     t_train = toc;  % Train_T 结束
-    fprintf('激活局部GP数量: %d  训练耗时: %.2f 秒\n', log_gp.ActivatedGPQuantity, t_train);
+    
+    % [核心修改 2]：将训练总时间折算为“每个点的训练耗时 (ms/pt)”
+    t_train_per_point = (t_train / N_train) * 1000;
+    fprintf('激活局部GP数量: %d  训练耗时: %.2f 秒 (平均 %.2f ms/点)\n', log_gp.ActivatedGPQuantity, t_train, t_train_per_point);
 
     %% 测试（Test_T 计时开始）
     % LoG-GP 在 test 阶段需要收集各局部GP预测再聚合 → 有通信开销
     mu_pred  = zeros(N_eval, y_dim);
     var_pred = zeros(N_eval, y_dim);
+
+    % 冻结模型状态：防止 predict 内部的 AgeOfLocalGP 更新触发 delete_Node_GP
+  
+    age_backup = log_gp.AgeOfLocalGP;
+    fprintf('测试前 ActivatedGPQuantity = %d\n', log_gp.ActivatedGPQuantity);
 
     tic;
     for n = 1:N_eval
@@ -122,7 +128,14 @@ for method_index = 1:numel(methods)
         end
     end
     t_test = toc;  % Test_T 结束
-    fprintf('预测耗时: %.2f 秒\n', t_test);
+    
+    % [核心修改 3]：将测试总时间折算为“每个点的测试耗时 (ms/pt)”
+    t_test_per_point = (t_test / N_eval) * 1000;
+
+    % 恢复模型状态（让 age 不被测试污染）
+    log_gp.AgeOfLocalGP = age_backup;
+    fprintf('测试后 ActivatedGPQuantity = %d  预测耗时: %.2f 秒 (平均 %.2f ms/点)\n', ...
+        log_gp.ActivatedGPQuantity, t_test, t_test_per_point);
 
     %% 计算指标
     err  = Y_eval - mu_pred;
@@ -130,31 +143,34 @@ for method_index = 1:numel(methods)
     rmse = mean(sqrt(mean(err.^2)));
     nlpd = mean(mean(0.5*(log(2*pi*var_pred) + err.^2 ./ var_pred)));
 
-    results(method_index, :) = [smse, rmse, nlpd, t_train, t_test];
+    % 存入 results 矩阵用于下方表格打印（存的是 ms/pt）
+    results(method_index, :) = [smse, rmse, nlpd, t_train_per_point, t_test_per_point];
 
-    fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train_T=%.1fs  Test_T=%.1fs\n', ...
-        smse, rmse, nlpd, t_train, t_test);
+    fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train: %.2f ms/pt  Test: %.2f ms/pt\n', ...
+        smse, rmse, nlpd, t_train_per_point, t_test_per_point);
 
     %% 保存（文件名带 seed 编号）
     method_lower = lower(method);
     save_name    = sprintf('log_%s_mc%d.mat', method_lower, seed);
+    % 同步保存新增加的单点时间变量
     save(fullfile(SaveFolder, save_name), ...
         'smse', 'rmse', 'nlpd', 't_train', 't_test', ...
+        't_train_per_point', 't_test_per_point', ...
         'method', 'seed', 'train_ratio');
 end
 
 %% 6. 打印对比表格
-fprintf('\n%s\n', repmat('=', 1, 72));
-fprintf('  %-12s  %8s  %8s  %8s  %10s  %10s\n', ...
-    'Method', 'SMSE', 'RMSE', 'NLPD', 'Train_T(s)', 'Test_T(s)');
-fprintf('  %s\n', repmat('-', 1, 68));
+fprintf('\n%s\n', repmat('=', 1, 78));
+fprintf('  %-12s  %8s  %8s  %8s  %12s  %12s\n', ...
+    'Method', 'SMSE', 'RMSE', 'NLPD', 'Train(ms/pt)', 'Test(ms/pt)');
+fprintf('  %s\n', repmat('-', 1, 74));
 method_labels = {'LoG-MOE', 'LoG-GPOE'};
 for mi = 1:numel(methods)
-    fprintf('  %-12s  %8.4f  %8.4f  %8.4f  %10.2f  %10.2f\n', ...
+    fprintf('  %-12s  %8.4f  %8.4f  %8.4f  %12.2f  %12.2f\n', ...
         method_labels{mi}, results(mi,1), results(mi,2), ...
         results(mi,3), results(mi,4), results(mi,5));
 end
-fprintf('%s\n\n', repmat('=', 1, 72));
+fprintf('%s\n\n', repmat('=', 1, 78));
 
 fprintf('[%s] seed=%d 完成。\n\n', DatasetName, seed);
 end

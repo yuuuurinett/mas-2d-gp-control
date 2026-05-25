@@ -1,7 +1,4 @@
 function run_testpoint_dataset(DatasetName, CurrentMode, train_ratio, seed)
-% 分布式高斯过程 - 测试点方法 (TP-DAC / TP-AC)
-% 完美终极版：包含统一预计算 10 倍提速优化、绝对公平抽样、防崩溃通信循环
-
 if nargin < 3, train_ratio = 0.4; end
 if nargin < 4, seed = 1;          end
 rng(seed);
@@ -46,7 +43,6 @@ n_train=round(size(train_x,1)*train_ratio);
 idx_tr=randperm(size(train_x,1),n_train);
 X_train=train_x(idx_tr,:); Y_train=train_y(idx_tr,:);
 
-% --- 绝对公平的 3000 个测试点随机抽样 ---
 idx_te=randperm(size(test_x,1));
 X_test=test_x(idx_te,:); Y_test=test_y(idx_te,:);
 
@@ -78,7 +74,7 @@ MultiAgentSystem=Manipulator_2D_2DoF_SetMASTopology(AgentQuantity,1);
 L=MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 
 %% 4. 训练局部 GP
-tic;
+t_start=tic;
 LocalGP_set=cell(AgentQuantity,1);
 for n=1:AgentQuantity
     idx=(n-1)*MaxDataPerAgent+1 : min(n*MaxDataPerAgent,N_train);
@@ -86,7 +82,8 @@ for n=1:AgentQuantity
     LocalGP_set{n}.add_Alldata(X_train(idx,:)',Y_train(idx,:)');
     LocalGP_set{n}.tau=1e-8; LocalGP_set{n}.delta=0.01;
 end
-fprintf('局部GP训练完成: %.2fs\n',toc);
+t_train=toc(t_start);
+fprintf('局部GP训练完成: %.4fs\n',t_train);
 
 %% 5. 方法字典配置
 dac_methods={'moe','gpoe','poe','bcm','rbcm'};
@@ -98,28 +95,44 @@ SaveFolder=fullfile('Result','Dataset',DatasetName);
 if ~exist(SaveFolder,'dir'), mkdir(SaveFolder); end
 p_dim=2*y_dim; tr_tag=round(train_ratio*100);
 
-%% =========================================================================
-%% 6. 统一预计算阶段 (核心 10 倍提速)
-%% =========================================================================
+%% 6. 统一预计算阶段 (向量化极速版)
 fprintf('\n[核心优化] 正在预计算 %d 个测试点的局部推断 (6个专家并算)...\n', N_eval);
 tic;
 Mu_Local_All  = zeros(AgentQuantity, y_dim, N_eval);
 Var_Local_All = zeros(AgentQuantity, y_dim, N_eval);
 
-for t = 1:N_eval
-    Test_Point_X = X_eval(t, :)';
-    for n = 1:AgentQuantity
-        [mn, vn] = LocalGP_set{n}.predict(Test_Point_X);
-        Mu_Local_All(n, :, t)  = mn'; 
-        Var_Local_All(n, :, t) = vn';
+% 核心优化：将测试点直接转置为矩阵 [x_dim, N_eval]
+X_eval_matrix = X_eval';
+
+for n = 1:AgentQuantity
+    try
+        % 尝试极速批量预测 (秒级完成)
+        [mn_batch, vn_batch] = LocalGP_set{n}.predict(X_eval_matrix);
+        
+        % 维度自适应装填
+        if size(mn_batch, 2) == N_eval
+            for t = 1:N_eval
+                Mu_Local_All(n, :, t)  = mn_batch(:, t)';
+                Var_Local_All(n, :, t) = vn_batch(:, t)';
+            end
+        else
+            for t = 1:N_eval
+                Mu_Local_All(n, :, t)  = mn_batch(t, :);
+                Var_Local_All(n, :, t) = vn_batch(t, :);
+            end
+        end
+    catch
+        % 如果类方法不支持矩阵输入，安全回退到原版循环
+        for t = 1:N_eval
+            [mn, vn] = LocalGP_set{n}.predict(X_eval_matrix(:, t));
+            Mu_Local_All(n, :, t)  = mn';
+            Var_Local_All(n, :, t) = vn';
+        end
     end
 end
 Precompute_Time = toc;
 fprintf('预计算完成！总计耗时: %.2f 秒 (每个点平均 %.4f 秒)\n', Precompute_Time, Precompute_Time/N_eval);
-
-%% =========================================================================
 %% 7. 聚合方法主循环 (共用预计算结果)
-%% =========================================================================
 for mi = 1:numel(AllModes)
     Current_Method = AllModes{mi};
     Method_Base_Name = strrep(lower(Current_Method), '_ac', '');
@@ -159,23 +172,76 @@ for mi = 1:numel(AllModes)
                 end
             end
         end
+        % =========================================================================
+        % [新增] 基于 IEEE TAC 2012 的分布式事件触发机制 (Distributed ET)
+        % =========================================================================
+        % Zeta   : 测试阶段本地连续演化的真实状态 (对应论文 x_i(t))
+        % Zeta_k : 上一次触发时保存/广播的状态快照 (对应论文 x_i(t_k))
+        Zeta   = zeros(p_dim, AgentQuantity, N_eval);
+        Zeta_k = zeros(p_dim, AgentQuantity, N_eval); 
         
-        % 执行稳健的网络共识迭代
-        Zeta_Comm = zeros(p_dim, AgentQuantity, N_eval);
+        trigger_count_set = zeros(AgentQuantity, 1); % 记录测试阶段触发次数
+        sigma_i = 0.1;  % 触发系数
+        a_param = 0.2;  % 论文参数 a
+        
+        comm_train = 0; % TP 架构离线训练无通信
+        
         for iter = 1:3000
-            Prev_Zeta = Zeta_Comm;
-            % 绝对安全的迭代方式
+            Prev_Zeta = Zeta;
+            
+            % ---------------------------------------------------------
+            % 1. 计算网络一致性驱动力 (邻居间仅通过触发状态 Zeta_k 交互)
+            % 注意: TP 架构这里的目标矩阵叫 P_Info_Matrix
+            % ---------------------------------------------------------
+            diff_k = P_Info_Matrix - Zeta_k; 
+            
+            % 连续动力演化 (相当于 dx = -Lx)
             for n = 1:AgentQuantity
-                Zeta_Comm(:, n, :) = Zeta_Comm(:, n, :) + t_step * Kappa_P * sum((P_Info_Matrix - Prev_Zeta) .* reshape(L(n, :), 1, AgentQuantity, 1), 2);
+                Zeta(:, n, :) = Zeta(:, n, :) + t_step * Kappa_P * ...
+                    sum(diff_k .* reshape(L(n, :), 1, AgentQuantity, 1), 2);
             end
-            if max(abs(Zeta_Comm(:) - Prev_Zeta(:))) < 1e-5
-                fprintf('    -> 网络收敛于第 %d 步\n', iter); 
+            
+            % ---------------------------------------------------------
+            % 2. Distributed Event-Trigger 判定 (遵循实验室 rho_i > rho_bar_i 风格)
+            % ---------------------------------------------------------
+            for n = 1:AgentQuantity
+                % 测量误差 e_i
+                e_i = Zeta_k(:,n,:) - Zeta(:,n,:);
+                
+                % 邻居间相对误差 z_i
+                z_i = sum((Zeta_k(:,n,:) - Zeta_k) .* reshape(L(n,:)<0, 1, AgentQuantity, 1), 2);
+                
+                % 符号完全对齐导师习惯
+                rho_i     = max(sum(e_i.^2, 1)); % ||e_i||^2
+                norm_z_sq = max(sum(z_i.^2, 1)); % ||z_i||^2
+                
+                N_i = sum(L(n,:) < 0); % 邻居数量 |N_i|
+                rho_bar_i = (sigma_i * a_param * (1 - a_param * N_i) / N_i) * norm_z_sq; 
+                
+                % 触发判定条件 
+                if rho_i > rho_bar_i || iter == 1
+                    Zeta_k(:,n,:) = Zeta(:,n,:);       % 触发更新并广播
+                    trigger_count_set(n) = trigger_count_set(n) + 1; 
+                end
+            end
+            
+            % ---------------------------------------------------------
+            % 3. 停止准则 (基于底层真实连续状态)
+            % ---------------------------------------------------------
+            if max(abs(Zeta(:) - Prev_Zeta(:))) < 1e-5
+                fprintf('    -> [Testing ET] 网络收敛于第 %d 步\n', iter);
                 break; 
             end
-        end
+        end % <--- 这是 for iter = 1:3000 的结束括号
         
-        % 提取共识均值
-        Final_Xi = P_Info_Matrix - Zeta_Comm;
+        % =========================================================
+        % [核心修复] 将 comm_test 移至循环体外，防止未收敛时保存报错
+        % =========================================================
+        comm_test = mean(trigger_count_set); 
+        fprintf('    -> 平均实际物理通信: %.1f 次\n', comm_test);
+        
+        % 提取共识均值 (用收敛后的真实状态 Zeta 替换原来的 Zeta_Comm)
+        Final_Xi = P_Info_Matrix - Zeta;
         for t = 1:N_eval
             for d = 1:y_dim
                 Xi_1 = Final_Xi(2*d-1, 1, t); 
@@ -190,6 +256,8 @@ for mi = 1:numel(AllModes)
 
     else
         %% --- B. 集中式聚合 (AC) ---
+        comm_train = 0;
+        comm_test  = 1;
         for t = 1:N_eval
             for d = 1:y_dim
                 All_Agent_Mu  = Mu_Local_All(:, d, t); 
@@ -236,20 +304,28 @@ for mi = 1:numel(AllModes)
     mu_pred = Final_Mean_Pred .* repmat(Y_std, N_eval, 1) + repmat(Y_mean, N_eval, 1);
     var_pred = Final_Var_Pred .* repmat(Y_std.^2, N_eval, 1);
 
+    %% --- 反归一化、误差计算与单点时间换算 ---
+    % 你的原有误差计算代码保留...
     err = Y_eval - mu_pred;
     smse = mean(mean(err.^2) ./ Y_var_base);
     rmse = mean(sqrt(mean(err.^2)));
     nlpd = mean(mean(0.5*(log(2*pi*var_pred) + err.^2 ./ var_pred)));
-    fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Time=%.1fs\n', smse, rmse, nlpd, t_test);
+
+    % [核心新增] 计算单点耗时 (ms/point)
+    t_train_per_point = (t_train / N_train) * 1000;
+    t_test_per_point  = (t_test / N_eval) * 1000;
+
+    % 修改打印输出，展示 ms/pt
+    fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train: %.2f ms/pt  Test: %.2f ms/pt\n', ...
+        smse, rmse, nlpd, t_train_per_point, t_test_per_point);
 
     err_sq_mean = mean(err.^2, 2);            
     smse_curve  = cumsum(err_sq_mean) ./ (1:N_eval)' / mean(Y_var_base);
     rmse_curve  = sqrt(cumsum(err_sq_mean) ./ (1:N_eval)');
 
-    t_train = 0; 
     save(fullfile(SaveFolder, sprintf('%s_tp_tr%d_mc%d.mat', Current_Method, tr_tag, seed)), ...
-        'smse', 'rmse', 'nlpd', 't_train', 't_test', 'Current_Method', 'seed', 'train_ratio', ...
-        'smse_curve', 'rmse_curve');
-end
-fprintf('\n[%s] 测试点 done. seed=%d tr=%d%%\n\n', DatasetName, seed, tr_tag);
+        'smse', 'rmse', 'nlpd', 't_train', 't_test', ...
+        't_train_per_point', 't_test_per_point', ... 
+        'comm_train', 'comm_test', ...
+        'Current_Method', 'seed', 'train_ratio', 'smse_curve', 'rmse_curve');
 end

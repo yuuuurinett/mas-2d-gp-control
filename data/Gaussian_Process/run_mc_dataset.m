@@ -1,7 +1,5 @@
 % run_mc_dataset.m
-
 clc; clear; close all;
-
 
 diary('Overnight_Log.txt');
 diary on;
@@ -10,125 +8,154 @@ fprintf('  任务开始时间: %s\n', datestr(now));
 fprintf('======================================================\n');
 
 %%  1. 全局配置区域 =================
-datasets    ={'KIN40K','POL','PUMADYN32NM','SARCOS'};
-%datasets    ={'KIN40K'};
+datasets    = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
+% datasets    = {'KIN40K'};
 train_ratio = 0.4;
-n_mc        = 5;   
+n_mc        = 1;   
 
-run_log_and_ip = true;  % 跑 LoG-GP基线 和 诱导点 (DAC+AC)
+run_log        = true;   % 跑 LoG-GP基线
+run_ip         = true;   % 跑 诱导点 (DAC+AC)
 run_tp         = true;  % 跑 测试点 (DAC+AC)
+run_cen        = true;  % 跑 集中式静态聚合基线 (CEN)
 run_nbr        = true;  % 跑 邻域静态聚合
 
-%% ================= 2. 方法 =================
+%% ================= 2. 方法字典 =================
 methods_dict = {
     'LoG-MOE',      'log_moe_mc%d.mat';           'LoG-GPOE',     'log_gpoe_mc%d.mat';
     'IP-DAC-MOE',   'moe_tr%d_mc%d.mat';          'IP-DAC-GPOE',  'gpoe_tr%d_mc%d.mat';
     'IP-DAC-POE',   'poe_tr%d_mc%d.mat';          'IP-DAC-BCM',   'bcm_tr%d_mc%d.mat';
-    'IP-DAC-RBCM',  'rbcm_tr%d_mc%d.mat';         'IP-AC-MOE',    'moe_ac_tr%d_mc%d.mat';
-    'IP-AC-GPOE',   'gpoe_ac_tr%d_mc%d.mat';      'IP-AC-POE',    'poe_ac_tr%d_mc%d.mat';
-    'IP-AC-BCM',    'bcm_ac_tr%d_mc%d.mat';       'IP-AC-RBCM',   'rbcm_ac_tr%d_mc%d.mat';
+    'IP-DAC-RBCM',  'rbcm_tr%d_mc%d.mat';
+    'IP-AC-MOE',    'moe_ac_tr%d_mc%d.mat';       'IP-AC-GPOE',   'gpoe_ac_tr%d_mc%d.mat';
+    'IP-AC-POE',    'poe_ac_tr%d_mc%d.mat';       'IP-AC-BCM',    'bcm_ac_tr%d_mc%d.mat';
+    'IP-AC-RBCM',   'rbcm_ac_tr%d_mc%d.mat';
     'TP-DAC-MOE',   'moe_tp_tr%d_mc%d.mat';       'TP-DAC-GPOE',  'gpoe_tp_tr%d_mc%d.mat';
     'TP-DAC-POE',   'poe_tp_tr%d_mc%d.mat';       'TP-DAC-BCM',   'bcm_tp_tr%d_mc%d.mat';
-    'TP-DAC-RBCM',  'rbcm_tp_tr%d_mc%d.mat';      'TP-AC-MOE',    'moe_ac_tp_tr%d_mc%d.mat';
-    'TP-AC-GPOE',   'gpoe_ac_tp_tr%d_mc%d.mat';   'TP-AC-POE',    'poe_ac_tp_tr%d_mc%d.mat';
-    'TP-AC-BCM',    'bcm_ac_tp_tr%d_mc%d.mat';    'TP-AC-RBCM',   'rbcm_ac_tp_tr%d_mc%d.mat';
-    'NBR-MOE',      'moe_nbr_mc%d.mat';      'NBR-GPOE',     'gpoe_nbr_mc%d.mat';
-    'NBR-POE',      'poe_nbr_mc%d.mat';      'NBR-BCM',      'bcm_nbr_mc%d.mat';
-    'NBR-RBCM',     'rbcm_nbr_mc%d.mat';
+    'TP-DAC-RBCM',  'rbcm_tp_tr%d_mc%d.mat';
+    'TP-AC-MOE',    'moe_ac_tp_tr%d_mc%d.mat';    'TP-AC-GPOE',   'gpoe_ac_tp_tr%d_mc%d.mat';
+    'TP-AC-POE',    'poe_ac_tp_tr%d_mc%d.mat';    'TP-AC-BCM',    'bcm_ac_tp_tr%d_mc%d.mat';
+    'TP-AC-RBCM',   'rbcm_ac_tp_tr%d_mc%d.mat';
+    'CEN-MOE',      'moe_cen_tr%d_mc%d.mat';      'CEN-GPOE',     'gpoe_cen_tr%d_mc%d.mat';
+    'CEN-POE',      'poe_cen_tr%d_mc%d.mat';      'CEN-BCM',      'bcm_cen_tr%d_mc%d.mat';
+    'CEN-RBCM',     'rbcm_cen_tr%d_mc%d.mat';
+    'NBR-MOE',      'moe_nbr_tr%d_mc%d.mat';      'NBR-GPOE',     'gpoe_nbr_tr%d_mc%d.mat';
+    'NBR-POE',      'poe_nbr_tr%d_mc%d.mat';      'NBR-BCM',      'bcm_nbr_tr%d_mc%d.mat';
+    'NBR-RBCM',     'rbcm_nbr_tr%d_mc%d.mat';
 };
-n_methods = size(methods_dict, 1);
-tr_tag = round(train_ratio * 100);
+methods_names = methods_dict(:,1);
+methods_files = methods_dict(:,2);
+num_methods   = length(methods_names);
 
-%% ================= 3. 执行仿真 (做菜阶段) =================
-for d = 1:numel(datasets)
-    for mc = 1:n_mc
-        fprintf('\n\n========== 当前进度: %s (MC %d/%d) ==========\n', datasets{d}, mc, n_mc);
-        
-        % 任务 1：LoG 和 诱导点
-        if run_log_and_ip
-            try
-                run_LoGGP_comparison(datasets{d}, train_ratio, mc);
-                run_inducingpoint_dataset(datasets{d}, 'all', train_ratio, mc);
-            catch ME, fprintf('\n[错误跳过] 诱导点任务失败: %s\n', ME.message); end
-        end
-        
-        % 任务 2：测试点
-        if run_tp
-            try
-                run_testpoint_dataset(datasets{d}, 'all', train_ratio, mc);
-            catch ME, fprintf('\n[错误跳过] 测试点任务失败: %s\n', ME.message); end
-        end
-        
-        % 任务 3：邻域静态聚合
-        if run_nbr
-            try
-                run_neighbor_dataset(datasets{d}, 'all', train_ratio, mc);
-            catch ME, fprintf('\n[错误跳过] 邻域任务失败: %s\n', ME.message); end
-        end
-        
-        % 每次循环结束，强制清理一次内存，保证 5GB 内存绝对不爆！
-        clearvars -except datasets train_ratio n_mc run_log_and_ip run_tp run_nbr methods_dict n_methods tr_tag d mc;
-        pause(1); 
-    end
-end
+% 7 种指标: SMSE, RMSE, NLPD, Train(ms/pt), Test(ms/pt), Comm_Tr, Comm_Te
+mean_results  = NaN(length(datasets), num_methods, 7);
+std_results   = NaN(length(datasets), num_methods, 7);
+tr_tag        = round(train_ratio * 100);
 
-%% ================= 4. 读取与汇总 (端菜上桌阶段) =================
-fprintf('\n\n======================================================\n');
-fprintf('  仿真阶段结束，开始从硬盘读取 .mat 文件并生成汇总表...\n');
-fprintf('======================================================\n');
-
-mean_results = nan(numel(datasets), n_methods, 5); % SMSE, RMSE, NLPD, TrT, TeT
-std_results  = nan(numel(datasets), n_methods, 5);
-
-for d = 1:numel(datasets)
-    SaveFolder = fullfile('Result', 'Dataset', datasets{d});
-    for mi = 1:n_methods
-        file_template = methods_dict{mi, 2};
-        raw = nan(n_mc, 5);
-        for mc = 1:n_mc
-            if contains(file_template, 'log_') || contains(file_template, '_nbr_')
-                fname = fullfile(SaveFolder, sprintf(file_template, mc));
-            else
-                fname = fullfile(SaveFolder, sprintf(file_template, tr_tag, mc));
-            end
-            if exist(fname, 'file')
-                r = load(fname, 'smse', 'rmse', 'nlpd', 't_train', 't_test');
-                raw(mc, :) = [r.smse, r.rmse, r.nlpd, r.t_train, r.t_test];
-            end
-        end
-        mean_results(d, mi, :) = mean(raw, 1, 'omitnan');
-        std_results(d, mi, :)  = std(raw, 0, 1, 'omitnan');
-    end
-end
-
-%% ================= 5. 打印超长精简大表 =================
-group_idx = [1, 3, 8, 13, 18, 23, 28]; % 分组边界
-
-for d = 1:numel(datasets)
-    fprintf('\n\n==================== %s (Train=%.0f%%, MC=%d) ====================\n', datasets{d}, train_ratio*100, n_mc);
-    fprintf('  %-15s  %11s  %11s  %11s  %10s  %10s\n', 'Method', 'SMSE', 'RMSE', 'NLPD', 'Train_T(s)', 'Test_T(s)');
-    fprintf('  %s\n', repmat('-', 1, 80));
+%% ================= 3. 运行 & 统计 =================
+for d = 1:length(datasets)
+    dname = datasets{d};
+    fprintf('\n>>> 处理数据集: %s <<<\n', dname);
     
-    for g = 1:6
-        group_means = mean_results(d, group_idx(g):group_idx(g+1)-1, 1);
-        if all(isnan(group_means(:))), continue; end % 如果这一组没跑，跳过打印
-        
-        for mi = group_idx(g) : group_idx(g+1)-1
-            m = squeeze(mean_results(d, mi, :));
-            s = squeeze(std_results(d, mi, :));
-            if all(isnan(m)), continue; end
-            
-            fprintf('  %-15s  %.4f±%.4f  %.4f±%.4f  %5.2f±%4.2f  %7.2f±%4.2f  %7.3f±%4.3f\n', ...
-                methods_dict{mi, 1}, m(1), s(1), m(2), s(2), m(3), s(3), m(4), s(4), m(5), s(5));
-        end
-        if g < 6, fprintf('  %s\n', repmat('-', 1, 80)); end 
+    for seed = 1:n_mc
+        if run_log, run_LoGGP_comparison(dname, train_ratio, seed); end
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+        if run_tp,  run_testpoint_dataset(dname, 'all', train_ratio, seed); end
+        if run_cen, run_centralized_dataset(dname, 'all', train_ratio, seed); end
+        if run_nbr, run_neighbor_dataset(dname, 'all', train_ratio, seed); end
     end
-    fprintf('=================================================================================\n');
+    
+    for mi = 1:num_methods
+        sm=NaN(1,n_mc); rm=NaN(1,n_mc); nl=NaN(1,n_mc); 
+        t_tr=NaN(1,n_mc); t_te=NaN(1,n_mc); c_tr=NaN(1,n_mc); c_te=NaN(1,n_mc);
+        
+        for mc = 1:n_mc
+            if contains(methods_files{mi}, 'tr%d')
+                fname = sprintf(methods_files{mi}, tr_tag, mc);
+            else
+                fname = sprintf(methods_files{mi}, mc);
+            end
+            file_path = fullfile('Result', 'Dataset', dname, fname);
+            
+            if exist(file_path, 'file')
+                try
+                    res = load(file_path);
+                    sm(mc) = res.smse;
+                    rm(mc) = res.rmse;
+                    nl(mc) = res.nlpd;
+                    
+                    
+                    t_tr(mc) = res.t_train_per_point;
+                    t_te(mc) = res.t_test_per_point;
+                    
+                    if isfield(res, 'comm_train'), c_tr(mc) = res.comm_train; else, c_tr(mc) = 0; end
+                    if isfield(res, 'comm_test'),  c_te(mc) = res.comm_test;  else, c_te(mc) = 0; end
+                catch
+                    fprintf('  [读取失败] %s\n', fname);
+                end
+            end
+        end
+        mean_results(d, mi, 1) = mean(sm, 'omitnan'); std_results(d, mi, 1) = std(sm, 'omitnan');
+        mean_results(d, mi, 2) = mean(rm, 'omitnan'); std_results(d, mi, 2) = std(rm, 'omitnan');
+        mean_results(d, mi, 3) = mean(nl, 'omitnan'); std_results(d, mi, 3) = std(nl, 'omitnan');
+        mean_results(d, mi, 4) = mean(t_tr,'omitnan');std_results(d, mi, 4) = std(t_tr,'omitnan');
+        mean_results(d, mi, 5) = mean(t_te,'omitnan');std_results(d, mi, 5) = std(t_te,'omitnan');
+        mean_results(d, mi, 6) = mean(c_tr,'omitnan');std_results(d, mi, 6) = 0;
+        mean_results(d, mi, 7) = mean(c_te,'omitnan');std_results(d, mi, 7) = 0;
+    end
 end
 
-% 保存汇总矩阵
-save(fullfile('Result', 'Dataset', 'All_27_Methods_Summary.mat'), 'datasets', 'methods_dict', 'mean_results', 'std_results');
-fprintf('\n汇总完成，结果矩阵已保存至 All_27_Methods_Summary.mat\n');
+%% 4. 打印排版 
+metrics_names = {'SMSE', 'RMSE', 'NLPD', 'Train_T(ms/pt)', 'Test_T(ms/pt)', 'Comm_Train', 'Comm_Test'};
+agg_list = {'MOE', 'GPOE', 'POE', 'BCM', 'RBCM'};
+col_prefixes = {'LoG', 'CEN', 'IP-DAC', 'IP-AC', 'TP-DAC', 'TP-AC', 'NBR'};
+sep_wide = repmat('=', 1, 130);
+sep_thin = repmat('-', 1, 130);
 
-fprintf('\n夜间挂机任务结束时间: %s\n', datestr(now));
+for met = 1:7
+    fprintf('\n%s\n', sep_wide);
+    fprintf('  Metric: %s  (Train=%.0f%%  MC=%d)\n', metrics_names{met}, train_ratio*100, n_mc);
+    fprintf('%s\n', sep_wide);
+    fprintf('  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR\n');
+    fprintf('  %s\n', sep_thin);
+    
+    for a_idx = 1:length(agg_list)
+        agg = agg_list{a_idx};
+        for d = 1:length(datasets)
+            if d == 1
+                fprintf('  %-4s   %-12s', agg, datasets{d});
+            else
+                fprintf('         %-12s', datasets{d});
+            end
+                    
+            for col = 1:7
+                prefix = col_prefixes{col};
+                target_method = sprintf('%s-%s', prefix, agg);
+                
+                
+                mi = find(strcmp(methods_names, target_method));
+                
+                if isempty(mi)
+                    fprintf('  %14s', '-');
+                else
+                    mv = mean_results(d, mi, met);
+                    sv = std_results(d,  mi, met);
+                    if isnan(mv)
+                        fprintf('  %14s', '-');
+                    elseif met >= 6
+                        if mv == 0, fprintf('  %14s', '-'); else, fprintf('  %14.0f', mv); end
+                    else
+                        val_str = sprintf('%.4f±%.4f', mv, sv);
+                        if met == 3 || met == 4 || met == 5
+                            val_str = sprintf('%.2f±%.2f', mv, sv);
+                        end
+                        fprintf('  %14s', val_str);
+                    end
+                end
+            end
+            fprintf('\n');
+        end
+        fprintf('  %s\n', sep_thin);
+    end
+end
+fprintf('\n%s\n', sep_wide);
+save(fullfile('Result', 'Dataset', 'All_27_Methods_Summary.mat'), 'mean_results', 'std_results');
 diary off;

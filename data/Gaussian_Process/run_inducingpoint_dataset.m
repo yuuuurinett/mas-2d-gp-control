@@ -76,14 +76,14 @@ fprintf('Train=%d  Test=%d  x=%d  y=%d\n', N_train,N_eval,x_dim,y_dim);
 AgentQuantity = 6;  Kappa_P = 10;  t_step = 0.01;
 MaxDataPerAgent = min(floor(N_train/AgentQuantity), 3000);
 switch upper(DatasetName)
-    case {'SARCOS','POL'},  NumInducingPoints = 1500;
-    otherwise,              NumInducingPoints = 800;
+    case {'SARCOS','POL'},  NumInducingPoints = 2500;
+    otherwise,              NumInducingPoints = 2000;
 end
 MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(AgentQuantity,1);
 L = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 
 %% 4. 训练局部 GP
-tic;
+t_start = tic;
 LocalGP_set = cell(AgentQuantity,1);
 for n = 1:AgentQuantity
     idx = (n-1)*MaxDataPerAgent+1 : min(n*MaxDataPerAgent,N_train);
@@ -91,7 +91,8 @@ for n = 1:AgentQuantity
     LocalGP_set{n}.add_Alldata(X_train(idx,:)', Y_train(idx,:)');
     LocalGP_set{n}.tau=1e-8;  LocalGP_set{n}.delta=0.01;
 end
-fprintf('局部GP: %.2fs\n', toc);
+t_train_gp = toc(t_start);  % 局部GP训练时间
+fprintf('局部GP: %.4fs\n', t_train_gp);
 
 idx_ind = randperm(N_train, NumInducingPoints);
 InducingPoints_Coordinates = X_train(idx_ind,:)';
@@ -155,15 +156,72 @@ for mi = 1:numel(AllModes)
             elseif strcmpi(cur,'rbcm'), Pi=P_rbcm;
             else,                       Pi=P_moe;
             end
-            Zeta=zeros(p_dim,AgentQuantity,NumInducingPoints);
-            for iter=1:3000
-                prev=Zeta; diff=Pi-Zeta;
-                for n=1:AgentQuantity
-                    Zeta(:,n,:)=Zeta(:,n,:)+t_step*Kappa_P*sum(diff.*reshape(L(n,:),1,AgentQuantity,1),2);
+            
+            % =========================================================================
+            % [实验室祖传风格重构] 基于 IEEE TAC 2012 的分布式事件触发机制 (Distributed ET)
+            % =========================================================================
+            % Zeta   : 本地连续演化的真实状态 (对应论文 x_i(t))
+            % Zeta_k : 上一次触发时保存/广播的状态快照 (对应论文 x_i(t_k))
+            Zeta   = zeros(p_dim, AgentQuantity, NumInducingPoints);
+            Zeta_k = zeros(p_dim, AgentQuantity, NumInducingPoints); 
+            
+            trigger_count_set = zeros(AgentQuantity, 1); % 记录每个 Agent 的触发次数
+            sigma_i = 0.1;  % 对应 TAC 论文公式(10)的触发系数
+            a_param = 0.2;  % 对应 TAC 论文公式(10)中的参数 a (需满足 0 < a < 1/|N_i|)
+
+            for iter = 1:3000
+                Zeta_prev = Zeta;
+                
+                % ---------------------------------------------------------
+                % 1. 计算网络一致性驱动力 (邻居间仅通过触发状态 Zeta_k 交互)
+                % ---------------------------------------------------------
+                diff_k = Pi - Zeta_k; 
+                
+                % 连续动力演化 (相当于 dx = -Lx)
+                for n = 1:AgentQuantity
+                    Zeta(:,n,:) = Zeta(:,n,:) + t_step * Kappa_P * ...
+                        sum(diff_k .* reshape(L(n,:), 1, AgentQuantity, 1), 2);
                 end
-                if max(abs(Zeta(:)-prev(:)))<1e-5, fprintf('  收敛: %d步\n',iter); break; end
+                
+                % ---------------------------------------------------------
+                % 2. Distributed Event-Trigger 判定 (遵循实验室 rho_i > rho_bar_i 风格)
+                % ---------------------------------------------------------
+                for n = 1:AgentQuantity
+                    % 论文公式(10)中的 e_i: 触发状态与当前连续状态的测量误差
+                    e_i = Zeta_k(:,n,:) - Zeta(:,n,:);
+                    
+                    % 论文公式(10)中的 z_i: 邻居间的触发状态相对误差反馈
+                    z_i = sum((Zeta_k(:,n,:) - Zeta_k) .* reshape(L(n,:)<0, 1, AgentQuantity, 1), 2);
+                    
+                    % 符号完全对齐导师习惯：rho_i 为实际误差，rho_bar_i 为动态阈值
+                    rho_i     = max(sum(e_i.^2, 1)); % ||e_i||^2
+                    norm_z_sq = max(sum(z_i.^2, 1)); % ||z_i||^2
+                    
+                    N_i = sum(L(n,:) < 0); % 邻居数量 |N_i|
+                    rho_bar_i = (sigma_i * a_param * (1 - a_param * N_i) / N_i) * norm_z_sq; 
+                    
+                    % 触发判定条件 (严格对应论文不等式)
+                    if rho_i > rho_bar_i || iter == 1
+                        Zeta_k(:,n,:) = Zeta(:,n,:);       % 触发更新: 广播当前最新连续状态
+                        trigger_count_set(n) = trigger_count_set(n) + 1; 
+                    end
+                end
+                
+                % ---------------------------------------------------------
+                % 3. 停止准则 (基于底层真实连续状态)
+                % ---------------------------------------------------------
+                if max(abs(Zeta(:) - Zeta_prev(:))) < 1e-5
+                    fprintf('  [Training ET] 收敛步数: %d 步\n', iter);
+                    break;
+                end
             end
-            Xi=Pi-Zeta;
+            
+            % [核心修复] 将 comm_train 移至循环体外
+            comm_train = mean(trigger_count_set); 
+            fprintf('  -> 平均实际物理通信: %.1f 次\n', comm_train);
+            
+            comm_test = 0; % IP 架构在线测试无通信
+            Xi = Pi - Zeta; % 最终用收敛后的连续状态 Zeta 计算预测
             phi=zeros(y_dim,NumInducingPoints);
             for d=1:y_dim
                 xi1=squeeze(Xi(2*d-1,1,:))'; xi2=squeeze(Xi(2*d,1,:))';
@@ -175,6 +233,8 @@ for mi = 1:numel(AllModes)
             end
 
         case ac_methods
+            comm_train = 1;  
+            comm_test  = 0;  
             base=strrep(lower(cur),'_ac','');
             phi=zeros(y_dim,NumInducingPoints);
             for m=1:NumInducingPoints
@@ -198,7 +258,7 @@ for mi = 1:numel(AllModes)
 
     MaskedGP=LocalGP_MultiOutput(x_dim,y_dim,NumInducingPoints,1e-6,SigmaF,SigmaL);
     MaskedGP.add_Alldata(InducingPoints_Coordinates,phi);
-    t_train=toc;
+    t_train = t_train_gp + toc;  % 局部GP训练 + DAC/AC共识时间
 
     tic;
     % 1. 提取 MaskedGP 已经训练好的内部参数
@@ -215,7 +275,6 @@ for mi = 1:numel(AllModes)
     % 4. 极速计算预测方差 (归一化空间)
     % 使用 Cholesky 因子做线性求解 V = L^(-1) * K_star，避免直接求逆
     V_matrix = Cholesky_L \ K_star;
-    % prior_var (SigmaF^2) 减去信息增益，并用噪声方差 SigmaN^2 兜底防崩溃
     var_normalized = max(SigmaF^2 - sum(V_matrix.^2, 1)', SigmaN^2);
 
     % 5. 反归一化：将预测结果还原到真实的物理量纲
@@ -224,21 +283,27 @@ for mi = 1:numel(AllModes)
 
     t_test = toc;
 
-    err=Y_eval-mu_pred;
-    smse=mean(mean(err.^2)./Y_var_base);
-    rmse=mean(sqrt(mean(err.^2)));
-    nlpd=mean(mean(0.5*(log(2*pi*var_pred)+err.^2./var_pred)));
-    fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train=%.1fs  Test=%.1fs\n', ...
-        smse,rmse,nlpd,t_train,t_test);
+    err = Y_eval - mu_pred;
+    smse = mean(mean(err.^2) ./ Y_var_base);
+    rmse = mean(sqrt(mean(err.^2)));
+    nlpd = mean(mean(0.5*(log(2*pi*var_pred) + err.^2 ./ var_pred)));
 
-    % 累积曲线（向量化，无需循环）
-    err_sq_mean  = mean(err.^2, 2);           % N_eval × 1
-    smse_curve   = cumsum(err_sq_mean) ./ (1:N_eval)' / mean(Y_var_base);
-    rmse_curve   = sqrt(cumsum(err_sq_mean) ./ (1:N_eval)');
+    % [核心新增] 计算单点耗时 (ms/point)
+    t_train_per_point = (t_train / N_train) * 1000;
+    t_test_per_point  = (t_test / N_eval) * 1000;
 
-    save(fullfile(SaveFolder,sprintf('%s_tr%d_mc%d.mat',cur,tr_tag,seed)), ...
-        'smse','rmse','nlpd','t_train','t_test','cur','seed','train_ratio', ...
-        'smse_curve','rmse_curve');
-end
-fprintf('\n[%s] 诱导点 done. seed=%d tr=%d%%\n\n', DatasetName, seed, tr_tag);
+    % 修改打印输出，展示 ms/pt
+    fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train: %.2f ms/pt  Test: %.2f ms/pt\n', ...
+        smse, rmse, nlpd, t_train_per_point, t_test_per_point);
+
+    err_sq_mean = mean(err.^2, 2);            
+    smse_curve  = cumsum(err_sq_mean) ./ (1:N_eval)' / mean(Y_var_base);
+    rmse_curve  = sqrt(cumsum(err_sq_mean) ./ (1:N_eval)');
+
+  
+    save(fullfile(SaveFolder, sprintf('%s_tr%d_mc%d.mat', cur, tr_tag, seed)), ...
+        'smse', 'rmse', 'nlpd', 't_train', 't_test', ...
+        't_train_per_point', 't_test_per_point', ...
+        'comm_train', 'comm_test', ...
+        'cur', 'seed', 'train_ratio', 'smse_curve', 'rmse_curve');
 end
