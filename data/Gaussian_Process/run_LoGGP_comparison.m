@@ -60,7 +60,7 @@ Y_test  = Y_all(idx_all(n_train+1:end),    :);
 
 [N_train, x_dim] = size(X_train);
 y_dim  = size(Y_train, 2);
-N_eval = min(30000, size(X_test, 1));
+N_eval = min(3000, size(X_test, 1));
 X_eval = X_test(1:N_eval, :);
 Y_eval = Y_test(1:N_eval, :);
 Y_var_baseline = var(Y_eval);
