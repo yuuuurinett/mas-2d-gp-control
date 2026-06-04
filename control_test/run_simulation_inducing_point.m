@@ -89,10 +89,19 @@ if ismember(lower(CurrentMode), dac_methods)
         LocalGP_set, AgentQuantity, NumInducingPoints, ...
         InducingPoints_Coordinates, base_method);
     Zeta_vector_inducing = zeros(p_dim, AgentQuantity, NumInducingPoints);
-    [MaskedGP, Zeta_vector_inducing] = gp_masked_aggregation_update( ...
+
+    % ET 参数初始化
+    neighbor_count_per_agent = sum(L_lap < 0, 2);  % [AgentQuantity × 1]
+    max_neighbor_count       = max(neighbor_count_per_agent);
+    et_sigma = 0.5;
+    et_a     = 0.5 / max_neighbor_count;
+    Zeta_last_trigger = zeros(p_dim, AgentQuantity, NumInducingPoints);
+    total_trigger_count = zeros(AgentQuantity, 1);
+
+    [MaskedGP, Zeta_vector_inducing, Zeta_last_trigger, ~] = gp_masked_aggregation_update( ...
         P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
         NumInducingPoints, 0, InducingPoints_Coordinates, SigmaF, SigmaL, ...
-        x_dim, base_method, p_dim);
+        x_dim, base_method, p_dim, Zeta_last_trigger, et_sigma, et_a, neighbor_count_per_agent);
 elseif ismember(lower(CurrentMode), ac_methods)
     base_method = strrep(lower(CurrentMode), '_ac', '');
     MaskedGP = gp_masked_aggregation_ac( ...
@@ -105,7 +114,6 @@ rng(42);  % 固定初始状态seed，确保所有方法一致
     x_all = rand(x_dim*AgentQuantity, 1);
 x_all_set = nan(x_dim*AgentQuantity, T);
 x_all_set(:,1) = x_all;
-%fprintf('[%s] 初始状态 x_all(1:4): %.4f %.4f %.4f %.4f\n', CurrentMode, x_all(1:4));
 vartheta_all_set = nan(x_dim*AgentQuantity, T);
 vartheta_all_set(:,1) = x_all - s_all_set(:,1) - kron(ones(AgentQuantity,1), xl_set(:,1));
 
@@ -149,10 +157,13 @@ for t_Nr = 1:T-1
                 mu_hat = max(-30, min(30, mu_hat));
                 f_hat_matrix(:,n) = mu_hat;
             end
-            [MaskedGP, Zeta_vector_inducing] = gp_masked_aggregation_update( ...
+            [MaskedGP, Zeta_vector_inducing, Zeta_last_trigger, step_triggers] = ...
+                gp_masked_aggregation_update( ...
                 P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
                 NumInducingPoints, t_step, InducingPoints_Coordinates, ...
-                SigmaF, SigmaL, x_dim, base_method, p_dim);
+                SigmaF, SigmaL, x_dim, base_method, p_dim, ...
+                Zeta_last_trigger, et_sigma, et_a, neighbor_count_per_agent);
+            total_trigger_count = total_trigger_count + step_triggers;
         case ac_methods
             for n = 1:AgentQuantity
                 [mu_hat,~] = MaskedGP{n}.predict(x_all_matrix(:,n));
@@ -201,12 +212,17 @@ for n = 1:AgentQuantity
 end
 
 fprintf('Mode: %s  Formation: %d  done, total=%.2fs\n', CurrentMode, use_formation, toc);
+if ismember(lower(CurrentMode), dac_methods)
+    fprintf('ET 平均触发次数: %.1f / %d 步 (%.1f%%)\n', ...
+        mean(total_trigger_count), T-1, mean(total_trigger_count)/(T-1)*100);
+end
 
 %% 10. Save
 if nargin >= 3
     if ~exist(SaveFolderName,'dir'), mkdir(SaveFolderName); end
     save(fullfile(SaveFolderName,[SaveFileName,'.mat']), ...
         't_set', 'TrackingError_vector', 'CurrentMode', 'use_formation', ...
-        'f_hat_all_set', 'f_true_all_set', 'vartheta_all_set');
+        'f_hat_all_set', 'f_true_all_set', 'vartheta_all_set', ...
+        'total_trigger_count');
 end
 end

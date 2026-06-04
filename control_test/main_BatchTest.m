@@ -2,8 +2,8 @@
 clc; close all;
 
 %% 配置
-CurrentMode  = 'all';   % 'poe'|'gpoe'|'moe'|'bcm'|'rbcm' 或 'all'
-TestType     = 'all';   % 'test'|'inducing'|'cen'|'nbr'|'all'
+CurrentMode  = 'poe';   % 'poe'|'gpoe'|'moe'|'bcm'|'rbcm' 或 'all'
+TestType     = 'inducing';   % 'test'|'inducing'|'cen'|'nbr'|'all'
 use_formation = false;   % true = 有formation，false = 无formation
 
 % 文件名后缀，方便两次结果共存

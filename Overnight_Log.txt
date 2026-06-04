@@ -82915,3 +82915,1158 @@ Train=17794  Test=3000  x=21  y=7
 ==================================================================================================================================
   任务结束时间: 02-Jun-2026 14:16:05
 ==================================================================================================================================
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:31:57
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+加载数据集: KIN40K  (seed=1, train_ratio=40%)
+Total: 40000  Train: 16000  Test(eval): 3000  x_dim: 8  y_dim: 1
+SigmaF=1.2966  SigmaN=0.0733
+
+--- LoG-MOE ---
+  训练进度: 1000/16000
+  训练进度: 2000/16000
+  训练进度: 3000/16000
+  训练进度: 4000/16000
+  训练进度: 5000/16000
+  训练进度: 6000/16000
+  训练进度: 7000/16000
+  训练进度: 8000/16000
+  训练进度: 9000/16000
+  训练进度: 10000/16000
+  训练进度: 11000/16000
+  训练进度: 12000/16000
+  训练进度: 13000/16000
+  训练进度: 14000/16000
+  训练进度: 15000/16000
+  训练进度: 16000/16000
+激活局部GP数量: 96  训练耗时: 3.50 秒 (平均 0.22 ms/点)
+测试前 ActivatedGPQuantity = 96
+  预测进度: 2000/3000
+测试后 ActivatedGPQuantity = 96  预测耗时: 0.39 秒 (平均 0.13 ms/点)
+  SMSE=0.0432  RMSE=0.2074  NLPD=-0.2513  Train: 0.22 ms/pt  Test: 0.13 ms/pt
+
+--- LoG-GPOE ---
+  训练进度: 1000/16000
+  训练进度: 2000/16000
+  训练进度: 3000/16000
+  训练进度: 4000/16000
+  训练进度: 5000/16000
+  训练进度: 6000/16000
+  训练进度: 7000/16000
+  训练进度: 8000/16000
+  训练进度: 9000/16000
+  训练进度: 10000/16000
+  训练进度: 11000/16000
+  训练进度: 12000/16000
+  训练进度: 13000/16000
+  训练进度: 14000/16000
+  训练进度: 15000/16000
+  训练进度: 16000/16000
+激活局部GP数量: 96  训练耗时: 3.42 秒 (平均 0.21 ms/点)
+测试前 ActivatedGPQuantity = 96
+  预测进度: 2000/3000
+测试后 ActivatedGPQuantity = 96  预测耗时: 0.32 秒 (平均 0.11 ms/点)
+  SMSE=0.0425  RMSE=0.2057  NLPD=-0.2547  Train: 0.21 ms/pt  Test: 0.11 ms/pt
+
+==============================================================================
+  Method            SMSE      RMSE      NLPD  Train(ms/pt)   Test(ms/pt)
+  --------------------------------------------------------------------------
+  LoG-MOE         0.0432    0.2074   -0.2513          0.22          0.13
+  LoG-GPOE        0.0425    0.2057   -0.2547          0.21          0.11
+==============================================================================
+
+[KIN40K] seed=1 完成。
+
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x_dim=8  y_dim=1
+ET 参数: sigma=0.50  a=0.2500  (max|N_i|=2，约束上界=0.5000)
+局部GP训练完成: 0.1007s
+[批量预计算] 正在计算 2000 个诱导点的局部预测...
+预计算完成，耗时: 0.27s
+
+[1/10] 方法: poe
+{函数或变量 'et_sigma' 无法识别。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_inducingpoint_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m', 257)" style="font-weight:bold">run_inducingpoint_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',257,0)">第 257 行</a>)
+                    et_coeff = (et_sigma * et_a * (1 - et_a * N_i) / N_i);
+                                ^^^^^^^^
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:34:25
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+加载数据集: KIN40K  (seed=1, train_ratio=40%)
+Total: 40000  Train: 16000  Test(eval): 3000  x_dim: 8  y_dim: 1
+SigmaF=1.2966  SigmaN=0.0733
+
+--- LoG-MOE ---
+  训练进度: 1000/16000
+  训练进度: 2000/16000
+  训练进度: 3000/16000
+  训练进度: 4000/16000
+  训练进度: 5000/16000
+  训练进度: 6000/16000
+  训练进度: 7000/16000
+  训练进度: 8000/16000
+  训练进度: 9000/16000
+  训练进度: 10000/16000
+  训练进度: 11000/16000
+  训练进度: 12000/16000
+  训练进度: 13000/16000
+  训练进度: 14000/16000
+  训练进度: 15000/16000
+  训练进度: 16000/16000
+激活局部GP数量: 96  训练耗时: 2.97 秒 (平均 0.19 ms/点)
+测试前 ActivatedGPQuantity = 96
+  预测进度: 2000/3000
+测试后 ActivatedGPQuantity = 96  预测耗时: 0.26 秒 (平均 0.09 ms/点)
+  SMSE=0.0432  RMSE=0.2074  NLPD=-0.2513  Train: 0.19 ms/pt  Test: 0.09 ms/pt
+
+--- LoG-GPOE ---
+  训练进度: 1000/16000
+  训练进度: 2000/16000
+  训练进度: 3000/16000
+  训练进度: 4000/16000
+  训练进度: 5000/16000
+  训练进度: 6000/16000
+  训练进度: 7000/16000
+  训练进度: 8000/16000
+  训练进度: 9000/16000
+  训练进度: 10000/16000
+  训练进度: 11000/16000
+  训练进度: 12000/16000
+  训练进度: 13000/16000
+  训练进度: 14000/16000
+  训练进度: 15000/16000
+  训练进度: 16000/16000
+激活局部GP数量: 96  训练耗时: 3.02 秒 (平均 0.19 ms/点)
+测试前 ActivatedGPQuantity = 96
+  预测进度: 2000/3000
+测试后 ActivatedGPQuantity = 96  预测耗时: 0.26 秒 (平均 0.09 ms/点)
+  SMSE=0.0425  RMSE=0.2057  NLPD=-0.2547  Train: 0.19 ms/pt  Test: 0.09 ms/pt
+
+==============================================================================
+  Method            SMSE      RMSE      NLPD  Train(ms/pt)   Test(ms/pt)
+  --------------------------------------------------------------------------
+  LoG-MOE         0.0432    0.2074   -0.2513          0.19          0.09
+  LoG-GPOE        0.0425    0.2057   -0.2547          0.19          0.09
+==============================================================================
+
+[KIN40K] seed=1 完成。
+
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x_dim=8  y_dim=1
+ET 参数: sigma=0.50  a=0.2500  (max|N_i|=2，约束上界=0.5000)
+局部GP训练完成: 0.0998s
+[批量预计算] 正在计算 2000 个诱导点的局部预测...
+预计算完成，耗时: 0.25s
+
+[1/10] 方法: poe
+{函数或变量 'et_a' 无法识别。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_inducingpoint_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m', 257)" style="font-weight:bold">run_inducingpoint_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',257,0)">第 257 行</a>)
+                    et_coeff = (sigma_i * a_param * (1 - et_a * N_i) / N_i);
+                                                         ^^^^
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:35:07
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+加载数据集: KIN40K  (seed=1, train_ratio=40%)
+Total: 40000  Train: 16000  Test(eval): 3000  x_dim: 8  y_dim: 1
+SigmaF=1.2966  SigmaN=0.0733
+
+--- LoG-MOE ---
+  训练进度: 1000/16000
+  训练进度: 2000/16000
+  训练进度: 3000/16000
+  训练进度: 4000/16000
+  训练进度: 5000/16000
+  训练进度: 6000/16000
+  训练进度: 7000/16000
+  训练进度: 8000/16000
+  训练进度: 9000/16000
+  训练进度: 10000/16000
+  训练进度: 11000/16000
+  训练进度: 12000/16000
+  训练进度: 13000/16000
+  训练进度: 14000/16000
+  训练进度: 15000/16000
+  训练进度: 16000/16000
+激活局部GP数量: 96  训练耗时: 3.37 秒 (平均 0.21 ms/点)
+测试前 ActivatedGPQuantity = 96
+  预测进度: 2000/3000
+测试后 ActivatedGPQuantity = 96  预测耗时: 0.29 秒 (平均 0.10 ms/点)
+  SMSE=0.0432  RMSE=0.2074  NLPD=-0.2513  Train: 0.21 ms/pt  Test: 0.10 ms/pt
+
+--- LoG-GPOE ---
+  训练进度: 1000/16000
+  训练进度: 2000/16000
+  训练进度: 3000/16000
+  训练进度: 4000/16000
+  训练进度: 5000/16000
+  训练进度: 6000/16000
+  训练进度: 7000/16000
+  训练进度: 8000/16000
+  训练进度: 9000/16000
+  训练进度: 10000/16000
+  训练进度: 11000/16000
+  训练进度: 12000/16000
+  训练进度: 13000/16000
+  训练进度: 14000/16000
+  训练进度: 15000/16000
+  训练进度: 16000/16000
+激活局部GP数量: 96  训练耗时: 2.95 秒 (平均 0.18 ms/点)
+测试前 ActivatedGPQuantity = 96
+  预测进度: 2000/3000
+测试后 ActivatedGPQuantity = 96  预测耗时: 0.28 秒 (平均 0.09 ms/点)
+  SMSE=0.0425  RMSE=0.2057  NLPD=-0.2547  Train: 0.18 ms/pt  Test: 0.09 ms/pt
+
+==============================================================================
+  Method            SMSE      RMSE      NLPD  Train(ms/pt)   Test(ms/pt)
+  --------------------------------------------------------------------------
+  LoG-MOE         0.0432    0.2074   -0.2513          0.21          0.10
+  LoG-GPOE        0.0425    0.2057   -0.2547          0.18          0.09
+==============================================================================
+
+[KIN40K] seed=1 完成。
+
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x_dim=8  y_dim=1
+ET 参数: sigma=0.50  a=0.2500  (max|N_i|=2，约束上界=0.5000)
+局部GP训练完成: 0.0930s
+[批量预计算] 正在计算 2000 个诱导点的局部预测...
+预计算完成，耗时: 0.20s
+
+[1/10] 方法: poe
+{函数或变量 'Bound' 无法识别。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_inducingpoint_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m', 258)" style="font-weight:bold">run_inducingpoint_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',258,0)">第 258 行</a>)
+                    Threshold = et_coeff * norm_z_sq + Bound;
+                                                       ^^^^^
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:37:08
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+加载数据集: KIN40K  (seed=1, train_ratio=40%)
+Total: 40000  Train: 16000  Test(eval): 3000  x_dim: 8  y_dim: 1
+SigmaF=1.2966  SigmaN=0.0733
+
+--- LoG-MOE ---
+  训练进度: 1000/16000
+  训练进度: 2000/16000
+  训练进度: 3000/16000
+  训练进度: 4000/16000
+  训练进度: 5000/16000
+  训练进度: 6000/16000
+  训练进度: 7000/16000
+{操作在以下过程中被用户终止 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('matlab.internal.math.rmMissingOutliers', '/Applications/MATLAB_R2024b.app/toolbox/matlab/datafun/+matlab/+internal/+math/rmMissingOutliers.m', 30)" style="font-weight:bold">matlab.internal.math.rmMissingOutliers</a> (<a href="matlab: opentoline('/Applications/MATLAB_R2024b.app/toolbox/matlab/datafun/+matlab/+internal/+math/rmMissingOutliers.m',30,0)">第 30 行</a>)
+
+
+位置 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('rmmissing', '/Applications/MATLAB_R2024b.app/toolbox/matlab/datafun/rmmissing.m', 63)" style="font-weight:bold">rmmissing</a> (<a href="matlab: opentoline('/Applications/MATLAB_R2024b.app/toolbox/matlab/datafun/rmmissing.m',63,0)">第 63 行</a>)
+[B,I] = matlab.internal.math.rmMissingOutliers('rmmissing',A,varargin{:});
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+位置 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('LoG_GP_MultiOutput/divideGP', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/LoG_GP_MultiOutput.m', 298)" style="font-weight:bold">LoG_GP_MultiOutput/divideGP</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/LoG_GP_MultiOutput.m',298,0)">第 298 行</a>)
+					iL = rmmissing(iL);
+          ^^^^^^^^^^^^^
+位置 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('LoG_GP_MultiOutput/devide', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/LoG_GP_MultiOutput.m', 233)" style="font-weight:bold">LoG_GP_MultiOutput/devide</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/LoG_GP_MultiOutput.m',233,0)">第 233 行</a>)
+			obj.divideGP(NodeNr,LocalGPNr,Extend_LocalGPNr);
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+位置 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('LoG_GP_MultiOutput/update', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/LoG_GP_MultiOutput.m', 156)" style="font-weight:bold">LoG_GP_MultiOutput/update</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/LoG_GP_MultiOutput.m',156,0)">第 156 行</a>)
+					obj.devide(NodeNr,LocalGPNr);
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+位置 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_LoGGP_comparison', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_LoGGP_comparison.m', 104)" style="font-weight:bold">run_LoGGP_comparison</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_LoGGP_comparison.m',104,0)">第 104 行</a>)
+        log_gp.update(X_train(n,:)', Y_train(n,:)');
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+位置 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 59)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',59,0)">第 59 行</a>)
+        if run_log, run_LoGGP_comparison(dname, train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:37:21
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x_dim=8  y_dim=1
+ET 参数: sigma=0.50  a=0.2500  (max|N_i|=2，约束上界=0.5000)
+局部GP训练完成: 0.0748s
+[批量预计算] 正在计算 2000 个诱导点的局部预测...
+预计算完成，耗时: 0.23s
+
+[1/10] 方法: poe
+{函数或变量 'et_sigma' 无法识别。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_inducingpoint_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m', 226)" style="font-weight:bold">run_inducingpoint_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',226,0)">第 226 行</a>)
+            sigma_i = et_sigma; % 确保使用了前面定义的 et_sigma
+                      ^^^^^^^^
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:37:41
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x_dim=8  y_dim=1
+ET 参数: sigma=0.50  a=0.2500  (max|N_i|=2，约束上界=0.5000)
+局部GP训练完成: 0.0884s
+[批量预计算] 正在计算 2000 个诱导点的局部预测...
+预计算完成，耗时: 0.19s
+
+[1/10] 方法: poe
+{函数或变量 'et_a' 无法识别。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_inducingpoint_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m', 253)" style="font-weight:bold">run_inducingpoint_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',253,0)">第 253 行</a>)
+                    et_coeff = (sigma_i * et_a * (1 - et_a * N_i) / N_i);
+                                          ^^^^
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:38:03
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x_dim=8  y_dim=1
+ET 参数: sigma=0.50  a=0.2500  (max|N_i|=2，约束上界=0.5000)
+局部GP训练完成: 0.0901s
+[批量预计算] 正在计算 2000 个诱导点的局部预测...
+预计算完成，耗时: 0.24s
+
+[1/10] 方法: poe
+  收敛步数: 2541  平均单点通信次数: 330.3 次
+  SMSE=0.0561  RMSE=0.2343  NLPD=0.1137  Train:0.94ms/pt  Test:0.07ms/pt
+
+[2/10] 方法: gpoe
+  收敛步数: 2490  平均单点通信次数: 335.7 次
+  SMSE=0.0560  RMSE=0.2340  NLPD=0.0806  Train:0.89ms/pt  Test:0.08ms/pt
+
+[3/10] 方法: moe
+  收敛步数: 2784  平均单点通信次数: 321.3 次
+  SMSE=0.0932  RMSE=0.3018  NLPD=0.9903  Train:0.99ms/pt  Test:0.08ms/pt
+
+[4/10] 方法: bcm
+  收敛步数: 2541  平均单点通信次数: 330.3 次
+  SMSE=0.0559  RMSE=0.2338  NLPD=0.1059  Train:0.85ms/pt  Test:0.08ms/pt
+
+[5/10] 方法: rbcm
+  收敛步数: 2431  平均单点通信次数: 328.0 次
+  SMSE=0.0559  RMSE=0.2338  NLPD=0.0777  Train:0.87ms/pt  Test:0.08ms/pt
+
+[6/10] 方法: moe_ac
+  SMSE=0.0903  RMSE=0.2972  NLPD=0.9265  Train:0.06ms/pt  Test:0.06ms/pt
+
+[7/10] 方法: gpoe_ac
+  SMSE=0.0545  RMSE=0.2308  NLPD=0.0365  Train:0.05ms/pt  Test:0.06ms/pt
+
+[8/10] 方法: poe_ac
+  SMSE=0.0539  RMSE=0.2296  NLPD=0.0526  Train:0.05ms/pt  Test:0.06ms/pt
+
+[9/10] 方法: bcm_ac
+  SMSE=0.0538  RMSE=0.2293  NLPD=0.0477  Train:0.05ms/pt  Test:0.06ms/pt
+
+[10/10] 方法: rbcm_ac
+  SMSE=0.0545  RMSE=0.2308  NLPD=0.0357  Train:0.05ms/pt  Test:0.06ms/pt
+
+==================================================================================================================================
+  Metric: SMSE  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K         0.0432±0.0000               -   0.0932±0.0000   0.0903±0.0000   0.0897±0.0000   0.0867±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K         0.0425±0.0000               -   0.0560±0.0000   0.0545±0.0000   0.0778±0.0000   0.0750±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -   0.0561±0.0000   0.0539±0.0000   0.0805±0.0000   0.0777±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -   0.0559±0.0000   0.0538±0.0000   0.0784±0.0000   0.0751±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -   0.0559±0.0000   0.0545±0.0000   0.0755±0.0000   0.0724±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: RMSE  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K         0.2074±0.0000               -   0.3018±0.0000   0.2972±0.0000   0.2962±0.0000   0.2912±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K         0.2057±0.0000               -   0.2340±0.0000   0.2308±0.0000   0.2758±0.0000   0.2708±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -   0.2343±0.0000   0.2296±0.0000   0.2806±0.0000   0.2756±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -   0.2338±0.0000   0.2293±0.0000   0.2769±0.0000   0.2710±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -   0.2338±0.0000   0.2308±0.0000   0.2718±0.0000   0.2661±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: NLPD  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K            -0.25±0.00               -       0.99±0.00       0.93±0.00       0.12±0.00       0.11±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K            -0.25±0.00               -       0.08±0.00       0.04±0.00       1.34±0.00       1.25±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.11±0.00       0.05±0.00       0.88±0.00       0.81±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.11±0.00       0.05±0.00       0.74±0.00       0.66±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.08±0.00       0.04±0.00       1.17±0.00       1.07±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Train_T(ms/pt)  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K             0.21±0.00               -       0.99±0.00       0.06±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K             0.18±0.00               -       0.89±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.94±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.85±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.87±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Test_T(ms/pt)  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K             0.10±0.00               -       0.08±0.00       0.06±0.00       0.43±0.00       0.02±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K             0.09±0.00               -       0.08±0.00       0.06±0.00       0.35±0.00       0.01±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.07±0.00       0.06±0.00       0.32±0.00       0.01±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.08±0.00       0.06±0.00       0.32±0.00       0.03±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.08±0.00       0.06±0.00       0.33±0.00       0.02±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Comm_Train  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -             321               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -             336               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -             330               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -             330               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -             328               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Comm_Test  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -               -               -               2               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Iter_Converge  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -            2784               1             202               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -            2490               1             269               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -            2541               1             250               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -            2541               1             250               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -            2431               1             269               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  任务结束时间: 05-Jun-2026 00:38:24
+==================================================================================================================================
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:40:39
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+{错误: <a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',301,9)">文件: run_inducingpoint_dataset.m 行: 301 列: 9</a>
+非法使用保留关键字 "case"。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:40:59
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+{错误: <a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',301,9)">文件: run_inducingpoint_dataset.m 行: 301 列: 9</a>
+非法使用保留关键字 "case"。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:41:45
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+{错误: <a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',301,9)">文件: run_inducingpoint_dataset.m 行: 301 列: 9</a>
+非法使用保留关键字 "case"。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 00:44:19
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x_dim=8  y_dim=1
+ET 参数: sigma=0.50  a=0.2500  (max|N_i|=2，约束上界=0.5000)
+局部GP训练完成: 0.0863s
+[批量预计算] 正在计算 2000 个诱导点的局部预测...
+预计算完成，耗时: 0.25s
+
+[1/10] 方法: poe
+  收敛步数: 3000  平均单点通信次数: 315.3 次
+  SMSE=0.0561  RMSE=0.2343  NLPD=0.1137  Train:1.09ms/pt  Test:0.07ms/pt
+
+[2/10] 方法: gpoe
+  收敛步数: 3000  平均单点通信次数: 349.3 次
+  SMSE=0.0560  RMSE=0.2340  NLPD=0.0806  Train:1.03ms/pt  Test:0.06ms/pt
+
+[3/10] 方法: moe
+  收敛步数: 3000  平均单点通信次数: 327.3 次
+  SMSE=0.0932  RMSE=0.3018  NLPD=0.9903  Train:1.03ms/pt  Test:0.06ms/pt
+
+[4/10] 方法: bcm
+  收敛步数: 3000  平均单点通信次数: 254.7 次
+  SMSE=0.0559  RMSE=0.2338  NLPD=0.1059  Train:1.03ms/pt  Test:0.06ms/pt
+
+[5/10] 方法: rbcm
+  收敛步数: 3000  平均单点通信次数: 351.7 次
+  SMSE=0.0559  RMSE=0.2338  NLPD=0.0777  Train:1.03ms/pt  Test:0.06ms/pt
+
+[6/10] 方法: moe_ac
+  SMSE=0.0903  RMSE=0.2972  NLPD=0.9265  Train:0.05ms/pt  Test:0.07ms/pt
+
+[7/10] 方法: gpoe_ac
+  SMSE=0.0545  RMSE=0.2308  NLPD=0.0365  Train:0.05ms/pt  Test:0.06ms/pt
+
+[8/10] 方法: poe_ac
+  SMSE=0.0539  RMSE=0.2296  NLPD=0.0526  Train:0.05ms/pt  Test:0.06ms/pt
+
+[9/10] 方法: bcm_ac
+  SMSE=0.0538  RMSE=0.2293  NLPD=0.0477  Train:0.05ms/pt  Test:0.06ms/pt
+
+[10/10] 方法: rbcm_ac
+  SMSE=0.0545  RMSE=0.2308  NLPD=0.0357  Train:0.05ms/pt  Test:0.06ms/pt
+
+==================================================================================================================================
+  Metric: SMSE  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K         0.0432±0.0000               -   0.0932±0.0000   0.0903±0.0000   0.0897±0.0000   0.0867±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K         0.0425±0.0000               -   0.0560±0.0000   0.0545±0.0000   0.0778±0.0000   0.0750±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -   0.0561±0.0000   0.0539±0.0000   0.0805±0.0000   0.0777±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -   0.0559±0.0000   0.0538±0.0000   0.0784±0.0000   0.0751±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -   0.0559±0.0000   0.0545±0.0000   0.0755±0.0000   0.0724±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: RMSE  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K         0.2074±0.0000               -   0.3018±0.0000   0.2972±0.0000   0.2962±0.0000   0.2912±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K         0.2057±0.0000               -   0.2340±0.0000   0.2308±0.0000   0.2758±0.0000   0.2708±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -   0.2343±0.0000   0.2296±0.0000   0.2806±0.0000   0.2756±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -   0.2338±0.0000   0.2293±0.0000   0.2769±0.0000   0.2710±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -   0.2338±0.0000   0.2308±0.0000   0.2718±0.0000   0.2661±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: NLPD  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K            -0.25±0.00               -       0.99±0.00       0.93±0.00       0.12±0.00       0.11±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K            -0.25±0.00               -       0.08±0.00       0.04±0.00       1.34±0.00       1.25±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.11±0.00       0.05±0.00       0.88±0.00       0.81±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.11±0.00       0.05±0.00       0.74±0.00       0.66±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.08±0.00       0.04±0.00       1.17±0.00       1.07±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Train_T(ms/pt)  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K             0.21±0.00               -       1.03±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K             0.18±0.00               -       1.03±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       1.09±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       1.03±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       1.03±0.00       0.05±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Test_T(ms/pt)  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K             0.10±0.00               -       0.06±0.00       0.07±0.00       0.43±0.00       0.02±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K             0.09±0.00               -       0.06±0.00       0.06±0.00       0.35±0.00       0.01±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.07±0.00       0.06±0.00       0.32±0.00       0.01±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.06±0.00       0.06±0.00       0.32±0.00       0.03±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.06±0.00       0.06±0.00       0.33±0.00       0.02±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Comm_Train  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -             327               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -             349               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -             315               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -             255               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -             352               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Comm_Test  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -               -               -               2               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Iter_Converge  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -            3000               1             202               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -            3000               1             269               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -            3000               1             250               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -            3000               1             250               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -            3000               1             269               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  任务结束时间: 05-Jun-2026 00:44:42
+==================================================================================================================================
+
+======================================================
+  任务开始时间: 05-Jun-2026 01:02:29
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x=8  y=1
+ET 参数: sigma=0.50  a=0.2500  (N_max=2)
+局部GP: 0.1200s
+[批量预计算] 正在预计算 2000 个诱导点...
+批量诱导点预计算完成！耗时: 0.34s
+
+[1/10] poe
+  [Training ET] 收敛步数: 275  平均通信: 3.0次
+  SMSE=0.0561  RMSE=0.2343  NLPD=0.1137  Train:0.50ms/pt  Test:0.11ms/pt
+
+[2/10] gpoe
+  [Training ET] 收敛步数: 293  平均通信: 3.0次
+  SMSE=0.0560  RMSE=0.2340  NLPD=0.0806  Train:0.38ms/pt  Test:0.14ms/pt
+
+[3/10] moe
+  [Training ET] 收敛步数: 197  平均通信: 2.7次
+  SMSE=0.0932  RMSE=0.3018  NLPD=0.9903  Train:0.30ms/pt  Test:0.21ms/pt
+
+[4/10] bcm
+  [Training ET] 收敛步数: 275  平均通信: 3.0次
+  SMSE=0.0559  RMSE=0.2338  NLPD=0.1059  Train:0.36ms/pt  Test:0.15ms/pt
+
+[5/10] rbcm
+  [Training ET] 收敛步数: 293  平均通信: 3.0次
+  SMSE=0.0559  RMSE=0.2338  NLPD=0.0777  Train:0.41ms/pt  Test:0.23ms/pt
+
+[6/10] moe_ac
+  SMSE=0.0903  RMSE=0.2972  NLPD=0.9265  Train:0.12ms/pt  Test:0.18ms/pt
+
+[7/10] gpoe_ac
+  SMSE=0.0545  RMSE=0.2308  NLPD=0.0365  Train:0.11ms/pt  Test:0.18ms/pt
+
+[8/10] poe_ac
+  SMSE=0.0539  RMSE=0.2296  NLPD=0.0526  Train:0.11ms/pt  Test:0.17ms/pt
+
+[9/10] bcm_ac
+  SMSE=0.0538  RMSE=0.2293  NLPD=0.0477  Train:0.10ms/pt  Test:0.18ms/pt
+
+[10/10] rbcm_ac
+  SMSE=0.0545  RMSE=0.2308  NLPD=0.0357  Train:0.11ms/pt  Test:0.18ms/pt
+
+==================================================================================================================================
+  Metric: SMSE  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K         0.0432±0.0000               -   0.0932±0.0000   0.0903±0.0000   0.0897±0.0000   0.0867±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K         0.0425±0.0000               -   0.0560±0.0000   0.0545±0.0000   0.0778±0.0000   0.0750±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -   0.0561±0.0000   0.0539±0.0000   0.0805±0.0000   0.0777±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -   0.0559±0.0000   0.0538±0.0000   0.0784±0.0000   0.0751±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -   0.0559±0.0000   0.0545±0.0000   0.0755±0.0000   0.0724±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: RMSE  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K         0.2074±0.0000               -   0.3018±0.0000   0.2972±0.0000   0.2962±0.0000   0.2912±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K         0.2057±0.0000               -   0.2340±0.0000   0.2308±0.0000   0.2758±0.0000   0.2708±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -   0.2343±0.0000   0.2296±0.0000   0.2806±0.0000   0.2756±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -   0.2338±0.0000   0.2293±0.0000   0.2769±0.0000   0.2710±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -   0.2338±0.0000   0.2308±0.0000   0.2718±0.0000   0.2661±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: NLPD  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K            -0.25±0.00               -       0.99±0.00       0.93±0.00       0.12±0.00       0.11±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K            -0.25±0.00               -       0.08±0.00       0.04±0.00       1.34±0.00       1.25±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.11±0.00       0.05±0.00       0.88±0.00       0.81±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.11±0.00       0.05±0.00       0.74±0.00       0.66±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.08±0.00       0.04±0.00       1.17±0.00       1.07±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Train_T(ms/pt)  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K             0.21±0.00               -       0.30±0.00       0.12±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K             0.18±0.00               -       0.38±0.00       0.11±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.50±0.00       0.11±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.36±0.00       0.10±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.41±0.00       0.11±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Test_T(ms/pt)  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K             0.10±0.00               -       0.21±0.00       0.18±0.00       0.43±0.00       0.02±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K             0.09±0.00               -       0.14±0.00       0.18±0.00       0.35±0.00       0.01±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.11±0.00       0.17±0.00       0.32±0.00       0.01±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.15±0.00       0.18±0.00       0.32±0.00       0.03±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.23±0.00       0.18±0.00       0.33±0.00       0.02±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Comm_Train  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -               3               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -               3               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -               3               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -               3               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -               3               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Comm_Test  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -               -               -               2               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Iter_Converge  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -             197               1             202               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -             293               1             269               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -             275               1             250               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -             275               1             250               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -             293               1             269               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  任务结束时间: 05-Jun-2026 01:02:44
+==================================================================================================================================
+
+======================================================
+  任务开始时间: 05-Jun-2026 01:07:31
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x=8  y=1
+ET 参数: sigma=0.50  a=0.2500  (N_max=2)
+局部GP: 0.1102s
+[批量预计算] 正在预计算 2000 个诱导点...
+批量诱导点预计算完成！耗时: 0.35s
+
+[1/10] poe
+{函数或变量 'dac_iter' 无法识别。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_inducingpoint_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m', 210)" style="font-weight:bold">run_inducingpoint_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',210,0)">第 210 行</a>)
+                if mod(dac_iter, 100) == 0
+                       ^^^^^^^^
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 01:07:49
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x=8  y=1
+ET 参数: sigma=0.50  a=0.2500  (N_max=2)
+局部GP: 0.1148s
+[批量预计算] 正在预计算 2000 个诱导点...
+批量诱导点预计算完成！耗时: 0.44s
+
+[1/10] poe
+{函数或变量 'Xi' 无法识别。
+
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_inducingpoint_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m', 211)" style="font-weight:bold">run_inducingpoint_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_inducingpoint_dataset.m',211,0)">第 211 行</a>)
+                    state_variance = var(squeeze(Xi(:,1,:)), 0, 2); % 计算 Agent 间状态的方差
+                                                 ^^^^^^^^^
+出错 <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m', 60)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process/run_mc_dataset.m',60,0)">第 60 行</a>)
+        if run_ip,  run_inducingpoint_dataset(dname, 'all', train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset
+
+======================================================
+  任务开始时间: 05-Jun-2026 01:09:31
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+
+[诱导点] KIN40K  seed=1  tr=40%
+Train=4000  Test=3000  x=8  y=1
+ET 参数: sigma=0.50  a=0.2500  (N_max=2)
+局部GP: 0.1091s
+[批量预计算] 正在预计算 2000 个诱导点...
+批量诱导点预计算完成！耗时: 0.55s
+
+[1/10] poe
+  [Training ET] 收敛步数: 275  平均通信: 18.0次
+  SMSE=0.0561  RMSE=0.2343  NLPD=0.1137  Train:0.49ms/pt  Test:0.18ms/pt
+
+[2/10] gpoe
+  [Training ET] 收敛步数: 293  平均通信: 18.0次
+  SMSE=0.0560  RMSE=0.2340  NLPD=0.0806  Train:0.38ms/pt  Test:0.15ms/pt
+
+[3/10] moe
+  [Training ET] 收敛步数: 197  平均通信: 16.0次
+  SMSE=0.0932  RMSE=0.3018  NLPD=0.9903  Train:0.28ms/pt  Test:0.13ms/pt
+
+[4/10] bcm
+  [Training ET] 收敛步数: 275  平均通信: 18.0次
+  SMSE=0.0559  RMSE=0.2338  NLPD=0.1059  Train:0.36ms/pt  Test:0.13ms/pt
+
+[5/10] rbcm
+  [Training ET] 收敛步数: 293  平均通信: 18.0次
+  SMSE=0.0559  RMSE=0.2338  NLPD=0.0777  Train:0.38ms/pt  Test:0.12ms/pt
+
+[6/10] moe_ac
+  SMSE=0.0903  RMSE=0.2972  NLPD=0.9265  Train:0.10ms/pt  Test:0.17ms/pt
+
+[7/10] gpoe_ac
+  SMSE=0.0545  RMSE=0.2308  NLPD=0.0365  Train:0.12ms/pt  Test:0.16ms/pt
+
+[8/10] poe_ac
+  SMSE=0.0539  RMSE=0.2296  NLPD=0.0526  Train:0.10ms/pt  Test:0.17ms/pt
+
+[9/10] bcm_ac
+  SMSE=0.0538  RMSE=0.2293  NLPD=0.0477  Train:0.10ms/pt  Test:0.18ms/pt
+
+[10/10] rbcm_ac
+  SMSE=0.0545  RMSE=0.2308  NLPD=0.0357  Train:0.11ms/pt  Test:0.17ms/pt
+
+==================================================================================================================================
+  Metric: SMSE  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K         0.0432±0.0000               -   0.0932±0.0000   0.0903±0.0000   0.0897±0.0000   0.0867±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K         0.0425±0.0000               -   0.0560±0.0000   0.0545±0.0000   0.0778±0.0000   0.0750±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -   0.0561±0.0000   0.0539±0.0000   0.0805±0.0000   0.0777±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -   0.0559±0.0000   0.0538±0.0000   0.0784±0.0000   0.0751±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -   0.0559±0.0000   0.0545±0.0000   0.0755±0.0000   0.0724±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: RMSE  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K         0.2074±0.0000               -   0.3018±0.0000   0.2972±0.0000   0.2962±0.0000   0.2912±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K         0.2057±0.0000               -   0.2340±0.0000   0.2308±0.0000   0.2758±0.0000   0.2708±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -   0.2343±0.0000   0.2296±0.0000   0.2806±0.0000   0.2756±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -   0.2338±0.0000   0.2293±0.0000   0.2769±0.0000   0.2710±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -   0.2338±0.0000   0.2308±0.0000   0.2718±0.0000   0.2661±0.0000               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: NLPD  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K            -0.25±0.00               -       0.99±0.00       0.93±0.00       0.12±0.00       0.11±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K            -0.25±0.00               -       0.08±0.00       0.04±0.00       1.34±0.00       1.25±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.11±0.00       0.05±0.00       0.88±0.00       0.81±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.11±0.00       0.05±0.00       0.74±0.00       0.66±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.08±0.00       0.04±0.00       1.17±0.00       1.07±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Train_T(ms/pt)  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K             0.21±0.00               -       0.28±0.00       0.10±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K             0.18±0.00               -       0.38±0.00       0.12±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.49±0.00       0.10±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.36±0.00       0.10±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.38±0.00       0.11±0.00       0.04±0.00       0.04±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Test_T(ms/pt)  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K             0.10±0.00               -       0.13±0.00       0.17±0.00       0.43±0.00       0.02±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K             0.09±0.00               -       0.15±0.00       0.16±0.00       0.35±0.00       0.01±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -       0.18±0.00       0.17±0.00       0.32±0.00       0.01±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -       0.13±0.00       0.18±0.00       0.32±0.00       0.03±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -       0.12±0.00       0.17±0.00       0.33±0.00       0.02±0.00               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Comm_Train  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -              16               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -              18               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -              18               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -              18               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -              18               1               -               -               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Comm_Test  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -               -               -               2               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -               -               -               3               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  Metric: Iter_Converge  (Train=40%  MC=1)
+==================================================================================================================================
+  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR
+  ----------------------------------------------------------------------------------------------------------------------------------
+  MOE    KIN40K                     -               -             197               1             202               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  GPOE   KIN40K                     -               -             293               1             269               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  POE    KIN40K                     -               -             275               1             250               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  BCM    KIN40K                     -               -             275               1             250               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+  RBCM   KIN40K                     -               -             293               1             269               1               -
+  ----------------------------------------------------------------------------------------------------------------------------------
+
+==================================================================================================================================
+  任务结束时间: 05-Jun-2026 01:09:45
+==================================================================================================================================

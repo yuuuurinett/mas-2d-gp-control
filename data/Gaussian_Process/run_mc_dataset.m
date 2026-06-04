@@ -8,16 +8,16 @@ fprintf('  任务开始时间: %s\n', datestr(now));
 fprintf('======================================================\n');
 
 %%  1. 全局配置区域
-datasets    = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
-%datasets    = {'KIN40K'};
+%datasets    = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
+datasets    = {'KIN40K'};
 train_ratio = 0.4;
-n_mc        = 5;
+n_mc        = 1;
 
-run_log        = true;
+run_log        = false;
 run_ip         = true;
-run_tp         = true;
-run_cen        = true;
-run_nbr        = true;
+run_tp         = false;
+run_cen        = false;
+run_nbr        = false;
 
 %% 2. 方法字典
 methods_dict = {
