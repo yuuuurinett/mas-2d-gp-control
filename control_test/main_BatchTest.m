@@ -2,15 +2,21 @@
 clc; close all;
 
 %% 配置
-CurrentMode = 'all';   % 'poe'|'gpoe'|'moe'|'bcm'|'rbcm' 或 'all'
-TestType    = 'all';   % 'test'|'inducing'|'cen'|'nbr'|'all'
+CurrentMode  = 'all';   % 'poe'|'gpoe'|'moe'|'bcm'|'rbcm' 或 'all'
+TestType     = 'all';   % 'test'|'inducing'|'cen'|'nbr'|'all'
+use_formation = false;   % true = 有formation，false = 无formation
+
+% 文件名后缀，方便两次结果共存
+form_tag = 'formation';
+if ~use_formation, form_tag = 'noformation'; end
 
 %% 路径
 SaveFolder_Test     = fullfile('Result', 'Test_Point');
 SaveFolder_Inducing = fullfile('Result', 'Inducing_Point');
 SaveFolder_CEN      = fullfile('Result', 'CEN');
 SaveFolder_NBR      = fullfile('Result', 'NBR');
-for f = {SaveFolder_Test, SaveFolder_Inducing, SaveFolder_CEN, SaveFolder_NBR}
+SaveFolder_Figures  = fullfile('Result', 'Figures');
+for f = {SaveFolder_Test, SaveFolder_Inducing, SaveFolder_CEN, SaveFolder_NBR, SaveFolder_Figures}
     if ~exist(f{1},'dir'), mkdir(f{1}); end
 end
 
@@ -33,47 +39,48 @@ run_nbr      = ismember(lower(TestType), {'nbr','all'});
 
 if run_inducing
     AllModes_ind = [Modes_dac, Modes_ac, Modes_baseline];
-    fprintf('\n======== 诱导点聚合 (IP-DAC + IP-AC) ========\n');
+    fprintf('\n======== 诱导点聚合 (IP-DAC + IP-AC) [%s] ========\n', form_tag);
     for m = 1:numel(AllModes_ind)
-        fprintf('[%d/%d] %s\n', m, numel(AllModes_ind), AllModes_ind{m});
-        run_simulation_inducing_point(AllModes_ind{m}, SaveFolder_Inducing, AllModes_ind{m});
+        fname = sprintf('%s_%s', AllModes_ind{m}, form_tag);
+        fprintf('[%d/%d] %s\n', m, numel(AllModes_ind), fname);
+        run_simulation_inducing_point(AllModes_ind{m}, SaveFolder_Inducing, fname, use_formation);
     end
 end
 
 if run_test
     AllModes_test = [Modes_dac, Modes_ac, Modes_baseline];
-    fprintf('\n======== 测试点聚合 (TP-DAC + TP-AC) ========\n');
+    fprintf('\n======== 测试点聚合 (TP-DAC + TP-AC) [%s] ========\n', form_tag);
     for m = 1:numel(AllModes_test)
-        fprintf('[%d/%d] %s\n', m, numel(AllModes_test), AllModes_test{m});
-        run_simulation_test_point(AllModes_test{m}, SaveFolder_Test, AllModes_test{m});
+        fname = sprintf('%s_%s', AllModes_test{m}, form_tag);
+        fprintf('[%d/%d] %s\n', m, numel(AllModes_test), fname);
+        run_simulation_test_point(AllModes_test{m}, SaveFolder_Test, fname, use_formation);
     end
 end
 
 if run_cen
-    fprintf('\n======== 集中式聚合 (CEN) ========\n');
+    fprintf('\n======== 集中式聚合 (CEN) [%s] ========\n', form_tag);
     for m = 1:numel(AllModes_dac)
-        fname = sprintf('cen_%s', AllModes_dac{m});
+        fname = sprintf('cen_%s_%s', AllModes_dac{m}, form_tag);
         fprintf('[%d/%d] %s\n', m, numel(AllModes_dac), fname);
-        run_simulation_cen(AllModes_dac{m}, SaveFolder_CEN, fname);
+        run_simulation_cen(AllModes_dac{m}, SaveFolder_CEN, fname, use_formation);
     end
 end
 
 if run_nbr
-    fprintf('\n======== 邻域聚合 (NBR) ========\n');
+    fprintf('\n======== 邻域聚合 (NBR) [%s] ========\n', form_tag);
     for m = 1:numel(AllModes_dac)
-        fname = sprintf('nbr_%s', AllModes_dac{m});
+        fname = sprintf('nbr_%s_%s', AllModes_dac{m}, form_tag);
         fprintf('[%d/%d] %s\n', m, numel(AllModes_dac), fname);
-        run_simulation_nbr(AllModes_dac{m}, SaveFolder_NBR, fname);
+        run_simulation_nbr(AllModes_dac{m}, SaveFolder_NBR, fname, use_formation);
     end
 end
 
-%% 2. 加载结果
-% 读取时间轴
+%% 2. 加载结果（用 formation 版本的时间轴）
 ref_candidates = {
-    fullfile(SaveFolder_Inducing,'poe.mat');
-    fullfile(SaveFolder_Test,    'poe.mat');
-    fullfile(SaveFolder_CEN,     'cen_poe.mat');
-    fullfile(SaveFolder_NBR,     'nbr_poe.mat')};
+    fullfile(SaveFolder_Inducing, sprintf('poe_%s.mat', form_tag));
+    fullfile(SaveFolder_Test,     sprintf('poe_%s.mat', form_tag));
+    fullfile(SaveFolder_CEN,      sprintf('cen_poe_%s.mat', form_tag));
+    fullfile(SaveFolder_NBR,      sprintf('nbr_poe_%s.mat', form_tag))};
 t_set = [];
 for i = 1:numel(ref_candidates)
     if exist(ref_candidates{i},'file')
@@ -83,51 +90,43 @@ for i = 1:numel(ref_candidates)
 end
 if isempty(t_set), fprintf('无结果文件，退出。\n'); return; end
 N = numel(t_set);
-load_err = @(folder,fname) load_tracking_error(folder,fname,N);
+load_err = @(folder,fname) load_tracking_error(folder, fname, N);
 
-% IP-DAC
+% IP-DAC / IP-AC
 Err_IP_DAC = nan(numel(Modes_dac),N);
+Err_IP_AC  = nan(numel(Modes_ac),N);
 for m=1:numel(Modes_dac)
-    Err_IP_DAC(m,:) = load_err(SaveFolder_Inducing, Modes_dac{m});
+    Err_IP_DAC(m,:) = load_err(SaveFolder_Inducing, sprintf('%s_%s', Modes_dac{m}, form_tag));
 end
-
-% IP-AC
-Err_IP_AC = nan(numel(Modes_ac),N);
 for m=1:numel(Modes_ac)
-    Err_IP_AC(m,:) = load_err(SaveFolder_Inducing, Modes_ac{m});
+    Err_IP_AC(m,:)  = load_err(SaveFolder_Inducing, sprintf('%s_%s', Modes_ac{m}, form_tag));
 end
 
-% TP-DAC
+% TP-DAC / TP-AC
 Err_TP_DAC = nan(numel(Modes_dac),N);
+Err_TP_AC  = nan(numel(Modes_ac),N);
 for m=1:numel(Modes_dac)
-    Err_TP_DAC(m,:) = load_err(SaveFolder_Test, Modes_dac{m});
+    Err_TP_DAC(m,:) = load_err(SaveFolder_Test, sprintf('%s_%s', Modes_dac{m}, form_tag));
 end
-
-% TP-AC
-Err_TP_AC = nan(numel(Modes_ac),N);
 for m=1:numel(Modes_ac)
-    Err_TP_AC(m,:) = load_err(SaveFolder_Test, Modes_ac{m});
+    Err_TP_AC(m,:)  = load_err(SaveFolder_Test, sprintf('%s_%s', Modes_ac{m}, form_tag));
 end
 
-% CEN
+% CEN / NBR
 Err_CEN = nan(numel(Modes_dac),N);
-for m=1:numel(Modes_dac)
-    Err_CEN(m,:) = load_err(SaveFolder_CEN, sprintf('cen_%s',Modes_dac{m}));
-end
-
-% NBR
 Err_NBR = nan(numel(Modes_dac),N);
 for m=1:numel(Modes_dac)
-    Err_NBR(m,:) = load_err(SaveFolder_NBR, sprintf('nbr_%s',Modes_dac{m}));
+    Err_CEN(m,:) = load_err(SaveFolder_CEN, sprintf('cen_%s_%s', Modes_dac{m}, form_tag));
+    Err_NBR(m,:) = load_err(SaveFolder_NBR, sprintf('nbr_%s_%s', Modes_dac{m}, form_tag));
 end
 
 % Baseline
-Err_Local = load_err(SaveFolder_Test, 'local');
-Err_Exact = load_err(SaveFolder_Test, 'exact');
+Err_Local = load_err(SaveFolder_Test, sprintf('local_%s', form_tag));
+Err_Exact = load_err(SaveFolder_Test, sprintf('exact_%s', form_tag));
 
 %% 3. 打印汇总表格
 fprintf('\n%s\n', repmat('=',1,80));
-fprintf('  Final Tracking Error ||e(T)||\n');
+fprintf('  Final Tracking Error ||e(T)||  [%s]\n', form_tag);
 fprintf('  %-10s  %-8s  %-8s  %-8s  %-8s  %-8s  %-8s\n', ...
     'Method','IP-DAC','IP-AC','TP-DAC','TP-AC','CEN','NBR');
 fprintf('  %s\n', repmat('-',1,76));
@@ -138,14 +137,14 @@ for m=1:numel(Modes_dac)
         Err_TP_DAC(m,end), Err_TP_AC(m,end), ...
         Err_CEN(m,end),    Err_NBR(m,end));
 end
-fprintf('  %s\n', repmat('-',1,76));
-fprintf('  %-10s  %-8s  %-8s  %-8.4f  %-8s  %-8s  %-8s\n', ...
-    'local','-','-',Err_Local(end),'-','-','-');
-fprintf('  %-10s  %-8s  %-8s  %-8.4f  %-8s  %-8s  %-8s\n', ...
-    'exact','-','-',Err_Exact(end),'-','-','-');
 fprintf('%s\n\n', repmat('=',1,80));
 
-%% 4. 绘图：每种聚合方法一张图，对比所有框架
+% Local 和 Exact 单独打印
+fprintf('  %-10s  %-8.4f\n', 'Local', Err_Local(end));
+fprintf('  %-10s  %-8.4f\n', 'Exact', Err_Exact(end));
+fprintf('%s\n\n', repmat('=',1,80));
+
+%% 4. 绘图
 lw = 1.5;
 for m=1:numel(Modes_dac)
     ac_name = [Modes_dac{m},'_ac'];
@@ -155,31 +154,24 @@ for m=1:numel(Modes_dac)
     hold on; grid on; box on;
     set(gca,'YScale','log','FontSize',11,'FontName','Times New Roman');
 
-    % IP 框架
     if ~all(isnan(Err_IP_DAC(m,:)))
         plot(t_set, Err_IP_DAC(m,:), 'b-',  'LineWidth',lw, 'DisplayName','IP-DAC');
     end
     if ~isempty(ac_idx) && ~all(isnan(Err_IP_AC(ac_idx,:)))
         plot(t_set, Err_IP_AC(ac_idx,:), 'b--', 'LineWidth',lw, 'DisplayName','IP-AC');
     end
-
-    % TP 框架
     if ~all(isnan(Err_TP_DAC(m,:)))
         plot(t_set, Err_TP_DAC(m,:), 'r-',  'LineWidth',lw, 'DisplayName','TP-DAC');
     end
     if ~isempty(ac_idx) && ~all(isnan(Err_TP_AC(ac_idx,:)))
         plot(t_set, Err_TP_AC(ac_idx,:), 'r--', 'LineWidth',lw, 'DisplayName','TP-AC');
     end
-
-    % CEN / NBR
     if ~all(isnan(Err_CEN(m,:)))
         plot(t_set, Err_CEN(m,:), 'g-',  'LineWidth',lw, 'DisplayName','CEN');
     end
     if ~all(isnan(Err_NBR(m,:)))
         plot(t_set, Err_NBR(m,:), 'm-',  'LineWidth',lw, 'DisplayName','NBR');
     end
-
-    % Baseline
     if ~all(isnan(Err_Local))
         plot(t_set, Err_Local, 'k--', 'LineWidth',1, 'DisplayName','Local');
     end
@@ -188,16 +180,18 @@ for m=1:numel(Modes_dac)
     end
 
     ylabel('$\|e\|$','Interpreter','latex','FontSize',13);
-    xlabel('$t$','Interpreter','latex','FontSize',13);
-    title(sprintf('Tracking Error - %s', upper(Modes_dac{m})), ...
+    xlabel('$t$ (s)','Interpreter','latex','FontSize',13);
+    title(sprintf('Tracking Error - %s [%s]', upper(Modes_dac{m}), form_tag), ...
         'FontSize',12,'FontName','Times New Roman');
     legend('Location','northeast','FontSize',9,'NumColumns',2);
     xlim([t_set(1), t_set(end)]);
-    saveas(fig, fullfile('Result', sprintf('Comparison_%s.png', upper(Modes_dac{m}))));
+
+    fname_fig = sprintf('Comparison_%s_%s', upper(Modes_dac{m}), form_tag);
+    saveas(fig, fullfile(SaveFolder_Figures, [fname_fig, '.png']));
+    savefig(fig, fullfile(SaveFolder_Figures, [fname_fig, '.fig']));
 end
 
-fprintf('完成。\n');
-
+fprintf('完成。图已保存至 %s\n', SaveFolder_Figures);
 
 %% 辅助函数
 function err = load_tracking_error(folder, fname, N)

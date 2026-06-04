@@ -1,4 +1,5 @@
-function [TrackingError_vector, t_set] = run_simulation_test_point(CurrentMode, SaveFolderName, SaveFileName)
+function [TrackingError_vector, t_set] = run_simulation_test_point(CurrentMode, SaveFolderName, SaveFileName, use_formation)
+if nargin < 4, use_formation = true; end
 rng(0);
 %% 1. System Parameters
 SystemOrder = 2; q_dim = 2; x_dim = q_dim * SystemOrder;
@@ -34,15 +35,20 @@ end
 %% 4. Time
 t_start = 0; t_end = 4; t_step = 0.01;
 t_set = t_start:t_step:t_end;
+T = numel(t_set);
 
 %% 5. Reference Trajectory
 [xl_set, xlr_set, ~] = Manipulator_2D_2DoF_LeaderDynamics(t_set, L1);
-s_all_set  = nan(x_dim*AgentQuantity, numel(t_set));
-sr_all_set = nan(q_dim*AgentQuantity, numel(t_set));
+s_all_set  = nan(x_dim*AgentQuantity, T);
+sr_all_set = nan(q_dim*AgentQuantity, T);
 for AgentNr = 1:AgentQuantity
     [s_all_set((AgentNr-1)*x_dim+(1:x_dim),:), ...
      sr_all_set((AgentNr-1)*q_dim+(1:q_dim),:)] = ...
         Manipulator_2D_2DoF_RelativePositionDynamics(t_set, AgentNr, AgentQuantity);
+end
+if ~use_formation
+    s_all_set  = zeros(size(s_all_set));
+    sr_all_set = zeros(size(sr_all_set));
 end
 
 %% 6. Local GPs
@@ -52,6 +58,7 @@ DomainScale = 1.5;
 MaxDataQuantity_set     = 400*ones(AgentQuantity,1);
 OfflineDataQuantity_set = MaxDataQuantity_set;
 SigmaN_set = 0.05*ones(AgentQuantity,1);
+prior_var = SigmaF^2;
 
 LocalGP_set = cell(AgentQuantity,1);
 for n = 1:AgentQuantity
@@ -65,12 +72,9 @@ for n = 1:AgentQuantity
     LocalGP_set{n}.delta = GP_delta;
 end
 
-prior_var = SigmaF^2;
-
 %% 7. Setup - DAC Zeta 初始化
 dac_methods = {'poe','gpoe','moe','bcm','rbcm'};
 ac_methods  = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};
-
 Kappa_P = 100;
 L_lap   = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 
@@ -80,22 +84,28 @@ switch lower(CurrentMode)
     case 'rbcm'
         Zeta_vector = zeros(6, AgentQuantity);
     otherwise
-        Zeta_vector = zeros(4, AgentQuantity);  % AC 方法不用，但先初始化
+        Zeta_vector = zeros(4, AgentQuantity);
 end
 
 %% 8. Initial State
-x_all = rand(x_dim*AgentQuantity, 1);
-x_all_set = nan(x_dim*AgentQuantity, numel(t_set));
+rng(42);  % 固定初始状态seed，确保所有方法一致
+    x_all = rand(x_dim*AgentQuantity, 1);
+x_all_set = nan(x_dim*AgentQuantity, T);
 x_all_set(:,1) = x_all;
-vartheta_all_set = nan(x_dim*AgentQuantity, numel(t_set));
+%fprintf('[%s] 初始状态 x_all(1:4): %.4f %.4f %.4f %.4f\n', CurrentMode, x_all(1:4));
+vartheta_all_set = nan(x_dim*AgentQuantity, T);
 vartheta_all_set(:,1) = x_all - s_all_set(:,1) - kron(ones(AgentQuantity,1), xl_set(:,1));
 
-f_hat_matrix = zeros(y_dim, AgentQuantity);
-TrackingError_vector = zeros(1, numel(t_set));
+f_hat_matrix  = zeros(y_dim, AgentQuantity);
+f_true_matrix = zeros(y_dim, AgentQuantity);
+TrackingError_vector = zeros(1, T);
+f_hat_all_set  = nan(y_dim, AgentQuantity, T);
+f_true_all_set = nan(y_dim, AgentQuantity, T);
 
 %% 9. Control Loop
+opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);
 tic;
-for t_Nr = 1:numel(t_set)-1
+for t_Nr = 1:T-1
     t = t_set(t_Nr);
     x_l_r        = xlr_set(:, t_Nr);
     x_all        = x_all_set(:, t_Nr);
@@ -111,15 +121,12 @@ for t_Nr = 1:numel(t_set)-1
 
     TrackingError_vector(t_Nr) = norm(vartheta_all);
 
-    % 控制律
     [phi_cell, ~, ~] = Manipulator_2D_2DoF_ConsensusLaw( ...
         vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
 
-    % GP 聚合预测
     AgentState_matrix = x_all_matrix;
 
     if ismember(lower(CurrentMode), dac_methods)
-        %% TP-DAC：原版迭代聚合
         switch lower(CurrentMode)
             case 'poe'
                 [Phi_Xi, Zeta_vector] = gp_test_poe( ...
@@ -140,7 +147,6 @@ for t_Nr = 1:numel(t_set)-1
         f_hat_matrix = Phi_Xi;
 
     elseif ismember(lower(CurrentMode), ac_methods)
-        %% TP-AC：每步直接对当前测试点的局部预测聚合，无需迭代
         base = strrep(lower(CurrentMode), '_ac', '');
         for n = 1:AgentQuantity
             x_n = AgentState_matrix(:, n);
@@ -178,7 +184,6 @@ for t_Nr = 1:numel(t_set)-1
         end
 
     elseif strcmpi(CurrentMode,'local')
-        %% Local GP
         for n = 1:AgentQuantity
             [mu_n,~] = LocalGP_set{n}.predict(AgentState_matrix(:,n));
             mu_n = max(-30, min(30, mu_n));
@@ -186,19 +191,22 @@ for t_Nr = 1:numel(t_set)-1
         end
 
     elseif strcmpi(CurrentMode,'exact')
-        %% Exact dynamics
         for n = 1:AgentQuantity
             f_hat_matrix(:,n) = Manipulator_2D_2DoF_UnknownDynamics(AgentState_matrix(:,n));
         end
     end
 
-    % 控制输入
+    for n = 1:AgentQuantity
+        f_true_matrix(:,n) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix(:,n));
+    end
+    f_hat_all_set(:,:,t_Nr)  = f_hat_matrix;
+    f_true_all_set(:,:,t_Nr) = f_true_matrix;
+
     u_cell = Manipulator_2D_2DoF_get_u_cell(x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
 
-    % 仿真
     [~, x_all_temp] = ode45( ...
         @(t,x) Manipulator_2D_2DoF_MultiAgent_DynamicFunction(t, x, u_cell, L1, L2, m1, m2), ...
-        [t, t+t_step], x_all);
+        [t, t+t_step], x_all, opts);
     x_all_next = x_all_temp(end,:)';
     x_all_set(:, t_Nr+1) = x_all_next;
     vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
@@ -207,12 +215,20 @@ for t_Nr = 1:numel(t_set)-1
     fprintf('t = %6.4f\n', t);
 end
 TrackingError_vector(end) = norm(vartheta_all_set(:,end));
-fprintf('Mode: %s done, total=%.2fs\n', CurrentMode, toc);
+
+x_all_matrix_end = reshape(x_all_set(:,end), x_dim, AgentQuantity);
+for n = 1:AgentQuantity
+    f_true_all_set(:,n,end) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix_end(:,n));
+    f_hat_all_set(:,n,end)  = f_hat_matrix(:,n);
+end
+
+fprintf('Mode: %s  Formation: %d  done, total=%.2fs\n', CurrentMode, use_formation, toc);
 
 %% 10. Save
 if nargin >= 3
     if ~exist(SaveFolderName,'dir'), mkdir(SaveFolderName); end
     save(fullfile(SaveFolderName,[SaveFileName,'.mat']), ...
-        't_set','TrackingError_vector','CurrentMode');
+        't_set','TrackingError_vector','CurrentMode','use_formation',...
+        'f_hat_all_set','f_true_all_set','vartheta_all_set');
 end
 end

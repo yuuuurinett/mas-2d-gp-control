@@ -1,17 +1,14 @@
 % plot_architectures_comparison_curves.m
 %clc; clear; close all;
 
-%datasets = {'KIN40K', 'POL', 'PUMADYN32NM', 'SARCOS'};
-datasets = {'SARCOS'};
+datasets = {'KIN40K', 'POL', 'PUMADYN32NM', 'SARCOS'};
+%datasets = {'SARCOS'};
 metrics  = {'SMSE', 'RMSE'};
 aggs     = {'moe', 'gpoe', 'poe', 'bcm', 'rbcm'};
 train_ratio = 40;
-n_mc = 5; % 根据你实际跑的 Monte Carlo 次数修改
+n_mc = 1; % 根据你实际跑的 Monte Carlo 次数修改
 
-% =========================================================================
-% [终极排版配置字典]
-% 格式: {'数据集', [画中画 X, Y, 宽, 高], [放大起始比例, 结束比例], '图例位置'}
-% =========================================================================
+
 dataset_configs = {
     % 格式: '数据集', [画中画 X, Y, 宽, 高], [放大起始比例, 结束比例], '图例位置'
     'KIN40K',      [0.20, 0.18, 0.35, 0.35], [0.01, 0.15], 'northeast';
@@ -138,12 +135,8 @@ for d = 1:numel(datasets)
                     % 主图 Y 轴上限计算
                     idx_stable = (xdata > max_x_length * 0.05) & valid_idx;
                     if any(idx_stable), all_y_max = max(all_y_max, max(ydata(idx_stable))); end
-                    
-                    % -------------------------------------------------
-                    % [高级优化] 仅在自定义的 zoom 区间内寻找放大框的 Y 轴极值
-                    % 核心技巧：计算放大框 Y 轴时，主动忽略高高在上的 NBR 和 Baseline(LoG)
-                    % 这样放大框的 Y 轴就会自动缩窄，把中间和底部的 IP/TP 曲线纵向放大拉开！
-                    % -------------------------------------------------
+                  
+              
                     idx_zoom = (xdata >= zoom_x_start & xdata <= zoom_x_end) & valid_idx;
                     if any(idx_zoom) && ~contains(name, 'LoG') && ~contains(name, 'NBR')
                         focus_y_min = min(focus_y_min, min(ydata(idx_zoom)));
@@ -180,9 +173,16 @@ for d = 1:numel(datasets)
                     ax_inset.XAxis.Exponent = 0;
                 end
 
+                % --- [关键修改：添加高分辨率 PNG 导出] ---
                 OutName = fullfile(SaveFolder, sprintf('Curve_%s_%s_%s', ds, upper(agg), metric));
+                
+                % 保存原有的 .fig 文件以便后续在 MATLAB 里编辑
                 savefig(fig, [OutName, '.fig']);
-                fprintf('  已生成并保留窗口: %s.fig\n', sprintf('Curve_%s_%s_%s', ds, upper(agg), metric));
+                
+                % 生成高分辨率的 .png 文件，方便直接拖入 PPT
+                exportgraphics(fig, [OutName, '.png'], 'Resolution', 300);
+                
+                fprintf('  已生成并保存图像: %s.fig 和 .png\n', sprintf('Curve_%s_%s_%s', ds, upper(agg), metric));
             end
         end
     end

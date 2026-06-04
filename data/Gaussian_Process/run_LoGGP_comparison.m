@@ -69,9 +69,15 @@ fprintf('Total: %d  Train: %d  Test(eval): %d  x_dim: %d  y_dim: %d\n', ...
     N_all, N_train, N_eval, x_dim, y_dim);
 fprintf('SigmaF=%.4f  SigmaN=%.4f\n', hp.SigmaF, hp.SigmaN);
 
-%% 3. 参数
-Max_LocalGP_DataQuantity = 100;
-Max_LocalGP_Quantity     = 500;
+%% 3. 改为参数化控制 
+Node_Capacity      = 500;    % 每个局部 GP 的最大物理容量
+Target_Fill_Rate   = 0.50;   % 导师要求的 40% 填充率
+
+% 计算每个节点实际承载的样本数
+% 即：每个节点最多装 100 个点，但我们只给它塞 40 个点就分裂
+Max_LocalGP_DataQuantity = floor(Node_Capacity * Target_Fill_Rate); 
+
+Max_LocalGP_Quantity     = 1500; 
 methods = {'MOE', 'GPOE'};
 
 %% 4. 保存路径
@@ -90,9 +96,7 @@ for method_index = 1:numel(methods)
         Max_LocalGP_DataQuantity, Max_LocalGP_Quantity, ...
         x_dim, y_dim, hp.SigmaN, hp.SigmaF, hp.SigmaL);
     log_gp.AggregationMethod = method;
-    
-    % [核心修改 1]：遵循师兄建议，将重叠率从 0 调至 0.05 (5%)。
-    % 这样可以激活边界处多个专家的联合方差评估，体现 MOE/GPOE 的真实聚合价值
+
     log_gp.o_ratio = 0.05; 
 
     tic;
@@ -104,7 +108,6 @@ for method_index = 1:numel(methods)
     end
     t_train = toc;  % Train_T 结束
     
-    % [核心修改 2]：将训练总时间折算为“每个点的训练耗时 (ms/pt)”
     t_train_per_point = (t_train / N_train) * 1000;
     fprintf('激活局部GP数量: %d  训练耗时: %.2f 秒 (平均 %.2f ms/点)\n', log_gp.ActivatedGPQuantity, t_train, t_train_per_point);
 
@@ -112,8 +115,6 @@ for method_index = 1:numel(methods)
     % LoG-GP 在 test 阶段需要收集各局部GP预测再聚合 → 有通信开销
     mu_pred  = zeros(N_eval, y_dim);
     var_pred = zeros(N_eval, y_dim);
-
-    % 冻结模型状态：防止 predict 内部的 AgeOfLocalGP 更新触发 delete_Node_GP
   
     age_backup = log_gp.AgeOfLocalGP;
     fprintf('测试前 ActivatedGPQuantity = %d\n', log_gp.ActivatedGPQuantity);
@@ -129,10 +130,8 @@ for method_index = 1:numel(methods)
     end
     t_test = toc;  % Test_T 结束
     
-    % [核心修改 3]：将测试总时间折算为“每个点的测试耗时 (ms/pt)”
     t_test_per_point = (t_test / N_eval) * 1000;
 
-    % 恢复模型状态（让 age 不被测试污染）
     log_gp.AgeOfLocalGP = age_backup;
     fprintf('测试后 ActivatedGPQuantity = %d  预测耗时: %.2f 秒 (平均 %.2f ms/点)\n', ...
         log_gp.ActivatedGPQuantity, t_test, t_test_per_point);
@@ -143,16 +142,16 @@ for method_index = 1:numel(methods)
     rmse = mean(sqrt(mean(err.^2)));
     nlpd = mean(mean(0.5*(log(2*pi*var_pred) + err.^2 ./ var_pred)));
 
-    % 存入 results 矩阵用于下方表格打印（存的是 ms/pt）
+   
     results(method_index, :) = [smse, rmse, nlpd, t_train_per_point, t_test_per_point];
 
     fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train: %.2f ms/pt  Test: %.2f ms/pt\n', ...
         smse, rmse, nlpd, t_train_per_point, t_test_per_point);
 
-    %% 保存（文件名带 seed 编号）
+    %% 保存
     method_lower = lower(method);
     save_name    = sprintf('log_%s_mc%d.mat', method_lower, seed);
-    % 同步保存新增加的单点时间变量
+
     save(fullfile(SaveFolder, save_name), ...
         'smse', 'rmse', 'nlpd', 't_train', 't_test', ...
         't_train_per_point', 't_test_per_point', ...

@@ -99,34 +99,31 @@ SaveFolder=fullfile('Result','Dataset',DatasetName);
 if ~exist(SaveFolder,'dir'), mkdir(SaveFolder); end
 tr_tag=round(train_ratio*100);
 
-%% 6. 统一预计算
+%% 6. 统一预计算 (调用外部批量加速函数版)
 fprintf('\n预计算 %d 个测试点的局部推断...\n', N_eval);
 tic;
 Mu_All  = zeros(AgentQuantity, y_dim, N_eval);
 Var_All = zeros(AgentQuantity, y_dim, N_eval);
-X_eval_matrix = X_eval';
+X_eval_matrix = X_eval'; % 转换为列格式 [x_dim x N_eval]
 
+chunk_size = 500; % 分块防止爆内存
 for n = 1:AgentQuantity
-    try
-        [mn_batch, vn_batch] = LocalGP_set{n}.predict(X_eval_matrix);
-        if size(mn_batch, 2) == N_eval
-            for t = 1:N_eval
-                Mu_All(n,:,t)  = mn_batch(:,t)';
-                Var_All(n,:,t) = vn_batch(:,t)';
-            end
-        else
-            for t = 1:N_eval
-                Mu_All(n,:,t)  = mn_batch(t,:);
-                Var_All(n,:,t) = vn_batch(t,:);
-            end
-        end
-    catch
-        for t = 1:N_eval
-            [mn,vn] = LocalGP_set{n}.predict(X_eval_matrix(:,t));
-            Mu_All(n,:,t)  = mn';
-            Var_All(n,:,t) = vn';
+    for start_idx = 1:chunk_size:N_eval
+        end_idx = min(start_idx + chunk_size - 1, N_eval);
+        X_chunk = X_eval_matrix(:, start_idx:end_idx);
+        
+        % 【关键修复】使用你写好的外部加速函数，完美绕过底层的 Bug
+        [mn_batch, vn_batch] = batch_predict_external(LocalGP_set{n}, X_chunk, SigmaN, SigmaF);
+        
+        % 将批量结果塞入总矩阵
+        for t_idx = 1:size(X_chunk, 2)
+            t_global = start_idx + t_idx - 1;
+            Mu_All(n, :, t_global)  = mn_batch(t_idx, :);
+            % var_batch 是一维的，扩展到 y_dim 维度
+            Var_All(n, :, t_global) = repmat(vn_batch(t_idx), 1, y_dim);
         end
     end
+    fprintf('  -> Agent %d 预计算完成\n', n);
 end
 Precompute_Time = toc;
 fprintf('预计算完成: %.2fs\n', Precompute_Time);
@@ -147,13 +144,13 @@ for mi=1:numel(method_list)
         for d=1:y_dim
             mu_a  = squeeze(Mu_All(:,d,t));    % [AgentQuantity×1]
             var_a = squeeze(Var_All(:,d,t));   % [AgentQuantity×1]
-            % [Fix 1] beta 不做归一化，与 IP/TP 版本保持完全一致
+            
             beta  = max(0.5*(log(prior_var)-log(var_a)), eps);
 
             switch cur
                 case 'moe'
                     Final_Mean(t,d) = mean(mu_a);
-                    % [Fix 2] 方差用直接平均，与 IP/TP 版本一致（不用混合高斯公式）
+                   
                     Final_Var(t,d)  = mean(var_a);
 
                 case 'poe'
@@ -172,7 +169,7 @@ for mi=1:numel(method_list)
                     Final_Var(t,d)  = 1 / max(prec, eps);
 
                 case 'rbcm'
-                    % [Fix 1] 去掉 beta_sum>1 的归一化分支，与 IP/TP 版本公式完全一致
+                    
                     prec = sum(beta./var_a) + (1 - sum(beta))/prior_var;
                     Final_Mean(t,d) = sum(beta.*mu_a./var_a) / max(prec, eps);
                     Final_Var(t,d)  = 1 / max(prec, eps);

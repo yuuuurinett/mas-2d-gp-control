@@ -76,7 +76,7 @@ L = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 A = double(L ~= 0); 
 for i=1:AgentQuantity, A(i,i)=1; end
 
-%% 4. 训练局部 GP (无重叠 + 100% 完美覆盖兜底)
+%% 4. 训练局部 GP 
 t_start = tic;
 LocalGP_set = cell(AgentQuantity, 1);
 
@@ -88,7 +88,7 @@ for n = 1:AgentQuantity
     start_idx = (n - 1) * W + 1;
     
     if n == AgentQuantity
-        % 最后一个 Agent 强制包揽剩余所有数据，绝不漏掉一个点！
+        
         end_idx = N_train; 
     else
         end_idx = start_idx + W - 1;
@@ -105,37 +105,32 @@ end
 t_train = toc(t_start);
 fprintf('局部GP训练完成(已确保100%%数据覆盖): %.4fs\n', t_train);
 
-%% 5. 预计算所有 Agent 的局部预测 (含向量化加速)
+%% 5. 预计算所有 Agent 的局部预测 (调用外部批量加速函数版)
 fprintf('\n预计算 %d 个测试点的局部推断...\n', N_eval);
 tic;
 Mu_Local  = zeros(AgentQuantity, y_dim, N_eval);
 Var_Local = zeros(AgentQuantity, y_dim, N_eval);
 X_eval_matrix = X_eval'; 
 
+chunk_size = 500; 
 for n = 1:AgentQuantity
-    try
-        [mn_batch, vn_batch] = LocalGP_set{n}.predict(X_eval_matrix);
-        if size(mn_batch, 2) == N_eval
-            for t = 1:N_eval
-                Mu_Local(n, :, t) = mn_batch(:, t)';
-                Var_Local(n, :, t) = vn_batch(:, t)';
-            end
-        else
-            for t = 1:N_eval
-                Mu_Local(n, :, t) = mn_batch(t, :);
-                Var_Local(n, :, t) = vn_batch(t, :);
-            end
-        end
-    catch
-        for t = 1:N_eval
-            [mn, vn] = LocalGP_set{n}.predict(X_eval_matrix(:, t));
-            Mu_Local(n, :, t) = mn'; 
-            Var_Local(n, :, t) = vn';
+    for start_idx = 1:chunk_size:N_eval
+        end_idx = min(start_idx + chunk_size - 1, N_eval);
+        X_chunk = X_eval_matrix(:, start_idx:end_idx);
+        
+        % 【关键修复】调用外部批量加速函数
+        [mn_batch, vn_batch] = batch_predict_external(LocalGP_set{n}, X_chunk, SigmaN, SigmaF);
+        
+        for t_idx = 1:size(X_chunk, 2)
+            t_global = start_idx + t_idx - 1;
+            Mu_Local(n, :, t_global)  = mn_batch(t_idx, :);
+            Var_Local(n, :, t_global) = repmat(vn_batch(t_idx), 1, y_dim);
         end
     end
+    fprintf('  -> Agent %d 预计算完成\n', n);
 end
 Precompute_Time = toc;
-
+fprintf('预计算全部完成: %.2fs\n', Precompute_Time);
 %% 6. 方法字典定义
 methods_all={'moe','gpoe','poe','bcm','rbcm'};
 if strcmpi(CurrentMode,'all'), method_list=methods_all;
@@ -212,7 +207,6 @@ for mi=1:numel(method_list)
     
     t_test = Precompute_Time/numel(method_list) + toc;
     
-    % [核心修改] 折算单点时间 ms/pt
     t_train_per_point = (t_train / N_train) * 1000;
     t_test_per_point  = (t_test / N_eval) * 1000;
 
@@ -227,7 +221,7 @@ for mi=1:numel(method_list)
     fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train: %.2f ms/pt  Test: %.2f ms/pt\n', ...
         smse, rmse, nlpd, t_train_per_point, t_test_per_point);
 
-    % [核心修改] 将 ms/pt 数据保存
+    
     save(fullfile(SaveFolder, sprintf('%s_nbr_tr%d_mc%d.mat', cur, tr_tag, seed)), ...
         'smse', 'rmse', 'nlpd', 't_train', 't_test', ...
         't_train_per_point', 't_test_per_point', ...

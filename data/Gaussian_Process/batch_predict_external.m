@@ -2,7 +2,6 @@ function [mu_batch, var_batch] = batch_predict_external(gp, X_query, SigmaN, Sig
 % 外部批量预测函数，绕过 LocalGP_MultiOutput.predict() 的单点限制
 %
 % 数学上完全等价于逐点调用 gp.predict(x)，但对所有查询点一次性完成矩阵运算
-% 不修改导师代码，仅通过 gp 对象的公开属性和 kernel 方法实现
 %
 % 输入:
 %   gp      : LocalGP_MultiOutput 对象（已调用 add_Alldata 完成训练）
