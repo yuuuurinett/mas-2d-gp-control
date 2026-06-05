@@ -15,7 +15,7 @@ n_mc        = 1;
 
 run_log        = false;
 run_ip         = true;
-run_tp         = false;
+run_tp         = true;
 run_cen        = false;
 run_nbr        = false;
 

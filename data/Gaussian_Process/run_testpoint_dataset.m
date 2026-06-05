@@ -81,13 +81,17 @@ max_data_per_agent = min(floor(num_train / num_agents), 3000);
 MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(num_agents, 1);
 Laplacian        = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 
-neighbor_count_per_agent = sum(Laplacian < 0, 2);
-max_neighbor_count       = max(neighbor_count_per_agent);
+neighbor_mask = (Laplacian < 0) | (Laplacian' < 0);
+neighbor_mask(1:size(neighbor_mask,1)+1:end) = false;
 
-% ET 参数
-et_sigma = 0.2;
-et_a     = 0.9 / max_neighbor_count;
-fprintf('ET 参数: sigma=%.2f  a=%.4f  (max|N_i|=%d)\n', et_sigma, et_a, max_neighbor_count);
+neighbor_count_per_agent = sum(neighbor_mask, 2);       
+num_directed_neighbor_links = sum(neighbor_count_per_agent);
+max_neighbor_count = max(neighbor_count_per_agent);
+
+et_sigma = 0.5;
+et_a     = 0.5 / max_neighbor_count;
+fprintf('ET 参数: sigma=%.2f  a=%.4f  (max|N_i|=%d, links/round=%d)\n', ...
+    et_sigma, et_a, max_neighbor_count, num_directed_neighbor_links);
 
 %% 4. 训练局部 GP
 t_start = tic;
@@ -118,13 +122,11 @@ p_dim  = 2 * output_dim;
 tr_tag = round(train_ratio * 100);
 
 %% 6. 批量预计算：对所有测试点做局部 GP 预测
-% local_mu_at_testpoints  [num_agents × output_dim × num_eval]：各 agent 在各测试点的预测均值
-% local_var_at_testpoints [num_agents × output_dim × num_eval]：各 agent 在各测试点的预测方差
 fprintf('\n[批量预计算] 正在计算 %d 个测试点的局部预测...\n', num_eval);
 tic;
 local_mu_at_testpoints  = zeros(num_agents, output_dim, num_eval);
 local_var_at_testpoints = zeros(num_agents, output_dim, num_eval);
-X_eval_col = X_eval';  % 转为列格式 [input_dim × num_eval]
+X_eval_col = X_eval';  
 
 for agent_idx = 1:num_agents
     [mu_batch, var_batch] = batch_predict_external( ...
@@ -147,163 +149,141 @@ for method_idx = 1:numel(AllModes)
     final_var_pred = zeros(num_eval, output_dim);
     tic;
 
-    if ismember(lower(current_method), dac_methods)
-        %% --- TP-DAC：测试点分布式平均共识（DAC）---
-
-        % 构建信息向量矩阵 P_info_matrix
-        % P_info_matrix [p_dim × num_agents × num_eval]：每个测试点上每个 agent 的信息向量
-        P_info_matrix = zeros(p_dim, num_agents, num_eval);
-        for test_idx = 1:num_eval
-            for agent_idx = 1:num_agents
-                local_mu_i  = local_mu_at_testpoints(agent_idx,:,test_idx)';
-                local_var_i = local_var_at_testpoints(agent_idx,:,test_idx)';
-                for dim_idx = 1:output_dim
-                    safe_var  = max(local_var_i(dim_idx), SigmaN^2);
-                    beta_gpoe = max(min(0.5*(log(prior_var)-log(safe_var)), 10), eps);
-                    switch lower(current_method)
-                        case 'moe'
-                            P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * local_mu_i(dim_idx);
-                            P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents * (safe_var + local_mu_i(dim_idx)^2);
-                        case 'gpoe'
-                            P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * beta_gpoe * local_mu_i(dim_idx) / safe_var;
-                            P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents * beta_gpoe / safe_var;
-                        case 'poe'
-                            P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * local_mu_i(dim_idx) / safe_var;
-                            P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents / safe_var;
-                        case 'bcm'
-                            P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * local_mu_i(dim_idx) / safe_var;
-                            P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents / safe_var - (num_agents-1) / prior_var;
-                        case 'rbcm'
-                            P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * beta_gpoe * local_mu_i(dim_idx) / safe_var;
-                            P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents * beta_gpoe / safe_var + (1 - num_agents*beta_gpoe) / prior_var;
-                    end
+    %% --- 构建所有方法的初始信息向量矩阵 P_info_matrix ---
+    P_info_matrix = zeros(p_dim, num_agents, num_eval);
+    for test_idx = 1:num_eval
+        for agent_idx = 1:num_agents
+            local_mu_i  = local_mu_at_testpoints(agent_idx,:,test_idx)';
+            local_var_i = local_var_at_testpoints(agent_idx,:,test_idx)';
+            for dim_idx = 1:output_dim
+                safe_var  = max(local_var_i(dim_idx), SigmaN^2);
+                beta_gpoe = max(min(0.5*(log(prior_var)-log(safe_var)), 10), eps);
+                switch base_method_name
+                    case 'moe'
+                        P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * local_mu_i(dim_idx);
+                        P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents * (safe_var + local_mu_i(dim_idx)^2);
+                    case 'gpoe'
+                        P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * beta_gpoe * local_mu_i(dim_idx) / safe_var;
+                        P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents * beta_gpoe / safe_var;
+                    case 'poe'
+                        P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * local_mu_i(dim_idx) / safe_var;
+                        P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents / safe_var;
+                    case 'bcm'
+                        P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * local_mu_i(dim_idx) / safe_var;
+                        P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents / safe_var - (num_agents-1) / prior_var;
+                    case 'rbcm'
+                        P_info_matrix(2*dim_idx-1, agent_idx, test_idx) = num_agents * beta_gpoe * local_mu_i(dim_idx) / safe_var;
+                        P_info_matrix(2*dim_idx,   agent_idx, test_idx) = num_agents * beta_gpoe / safe_var + (1 - num_agents*beta_gpoe) / prior_var;
                 end
             end
         end
+    end
 
-        % DAC 迭代
-       % =========================================================================
-        % [核心修复] TP-DAC 纯正分布式平均共识与独立事件触发
-        % =========================================================================
-        Xi              = P_info_matrix;  % 真实连续状态 [p_dim, num_agents, num_eval]
-        Xi_last_trigger = P_info_matrix;  % 广播状态快照
-        
-        % 独立通信计数器：记录 [每个智能体] 对 [每个测试点] 的通信触发次数
-        trigger_count_per_agent = zeros(num_agents, num_eval); 
+    if ismember(lower(current_method), dac_methods)
+        % ==================== TP-DAC ====================
+        Xi              = P_info_matrix; 
+        Xi_last_trigger = P_info_matrix;  
+        trigger_count_set = zeros(num_agents, 1); 
         
         dac_iter  = 0;
         max_iters = 3000;
-        
-        % 防 Zeno 现象的衰减 Bound 参数
-        c_0 = 0.1;           
-        alpha_decay = 0.02;  
-        comm_train = 0;
 
         while dac_iter < max_iters
             dac_iter  = dac_iter + 1;
             Xi_prev = Xi;
 
-            %% Step 1：计算邻居的广播状态驱动力 (L * Xi_last_trigger)
+            % 1. 共识驱动力计算
             L_Xi = zeros(size(Xi_last_trigger));
             for agent_idx = 1:num_agents
                 L_Xi(:, agent_idx, :) = sum(Xi_last_trigger .* reshape(Laplacian(agent_idx,:), 1, num_agents, 1), 2);
             end
 
-            %% Step 2：真实状态演化 (\dot{Xi} = - L * \hat{Xi})
+            % 2. 状态演化
             for agent_idx = 1:num_agents
                 Xi(:, agent_idx, :) = Xi(:, agent_idx, :) - dac_step_size * dac_gain * L_Xi(:, agent_idx, :);
             end
 
-            %% Step 3：事件触发判断 (Point-wise 完全解耦，各测试点独立触发)
-            Bound = c_0 * exp(-alpha_decay * dac_iter); 
-            
+            % 3. 事件触发
             for agent_idx = 1:num_agents
-                % 误差矩阵 [p_dim, 1, num_eval]
-                error_i = Xi_last_trigger(:, agent_idx, :) - Xi(:, agent_idx, :);
+                e_i = Xi_last_trigger(:, agent_idx, :) - Xi(:, agent_idx, :);
+                rho_i = sum(e_i(:).^2); 
                 
-                % 沿着特征维度求平方和，保留每个测试点的独立性 (降维为 num_eval 长度的向量)
-                norm_e_sq = squeeze(sum(error_i.^2, 1));    
-                norm_z_sq = squeeze(sum(L_Xi(:, agent_idx, :).^2, 1)); 
+                z_i = sum((Xi(:, agent_idx, :) - Xi) .* reshape(Laplacian(agent_idx,:) < 0, 1, num_agents, 1), 2);
+                norm_z_sq = sum(z_i(:).^2); 
                 
-                % 统一转为列向量防止维度不匹配
-                if size(norm_e_sq, 1) == 1, norm_e_sq = norm_e_sq'; end
-                if size(norm_z_sq, 1) == 1, norm_z_sq = norm_z_sq'; end
-                
-                % 计算当前 agent 的控制系数
                 N_i = neighbor_count_per_agent(agent_idx);
-                et_coeff = (et_sigma * et_a * (1 - et_a * N_i) / N_i);
+                delta_bound = 1e-6; 
+                et_coeff = et_sigma * et_a * (1 - et_a * N_i) / N_i;
+                Threshold = et_coeff * norm_z_sq + delta_bound;
                 
-                % 独立测试点的阈值向量
-                Threshold = et_coeff * norm_z_sq + Bound;
-                
-                % 找出当前 agent 需要触发的“测试点”索引
-                trigger_idx = find(norm_e_sq > Threshold);
-                
-                if dac_iter == 1
-                    trigger_idx = 1:num_eval; % 第一步强制全体触发广播以初始化
-                end
-                
-                if ~isempty(trigger_idx)
-                    % 仅更新触发了的测试点状态
-                    Xi_last_trigger(:, agent_idx, trigger_idx) = Xi(:, agent_idx, trigger_idx);
-                    trigger_count_per_agent(agent_idx, trigger_idx) = trigger_count_per_agent(agent_idx, trigger_idx) + 1;
+                if rho_i > Threshold || dac_iter == 1
+                    Xi_last_trigger(:, agent_idx, :) = Xi(:, agent_idx, :);
+                    trigger_count_set(agent_idx) = trigger_count_set(agent_idx) + N_i; 
                 end
             end
 
-            %% Step 4：收敛判断
+            % 4. 收敛判断
             if max(abs(Xi(:) - Xi_prev(:))) < 1e-5
                 break;
             end
         end
 
         iter_converge = dac_iter;
-        comm_test     = mean(trigger_count_per_agent(:));
-        fprintf('    -> 收敛步数: %d  平均ET单点触发次数: %.1f\n', iter_converge, comm_test);
+        comm_test     = mean(trigger_count_set); 
+        comm_train    = 0; 
+        fprintf('    -> 收敛步数: %d  平均通信量: %.1f次/agent\n', iter_converge, comm_test);
+        Xi_consensus  = Xi; 
 
-        %% Step 5：提取聚合预测
-        Xi_consensus = Xi;
+    else
+        % ==================== TP-AC ====================
+        % TP-AC：在测试点上直接一次性全局聚合，不需要迭代
         for test_idx = 1:num_eval
             for dim_idx = 1:output_dim
-                Xi_num = Xi_consensus(2*dim_idx-1, 1, test_idx);
-                Xi_den = Xi_consensus(2*dim_idx,   1, test_idx);
-                if ismember(lower(current_method), {'gpoe','poe','bcm','rbcm'})
-                    final_mu_pred(test_idx, dim_idx) = Xi_num / max(Xi_den, eps);
-                else
-                    final_mu_pred(test_idx, dim_idx) = Xi_num / num_agents;
+                mu_all  = local_mu_at_testpoints(:, dim_idx, test_idx);
+                var_all = local_var_at_testpoints(:, dim_idx, test_idx);
+                beta_all = max(0.5*(log(prior_var)-log(var_all)), eps);
+                switch base_method_name
+                    case 'moe'
+                        final_mu_pred(test_idx, dim_idx) = mean(mu_all);
+                    case 'gpoe'
+                        prec = sum(beta_all./var_all);
+                        final_mu_pred(test_idx, dim_idx) = sum(beta_all.*mu_all./var_all)/max(prec,eps);
+                    case 'poe'
+                        prec = sum(1./var_all);
+                        final_mu_pred(test_idx, dim_idx) = sum(mu_all./var_all)/max(prec,eps);
+                    case 'bcm'
+                        prec = sum(1./var_all)-(num_agents-1)/prior_var;
+                        final_mu_pred(test_idx, dim_idx) = sum(mu_all./var_all)/max(prec,eps);
+                    case 'rbcm'
+                        prec = sum(beta_all./var_all)+(1-sum(beta_all))/prior_var;
+                        final_mu_pred(test_idx, dim_idx) = sum(beta_all.*mu_all./var_all)/max(prec,eps);
                 end
             end
         end
-    else
-        %% --- TP-AC：测试点平均共识（一轮通信，无迭代）---
-        comm_train    = 0;
-        comm_test     = 1;
+
         iter_converge = 1;
+        comm_test     = 1;
+        comm_train    = 0;
+        fprintf('    -> [TP-AC] 直接聚合完成，comm_test=1\n');
+    end
+
+    %% --- 提取 TP-DAC 预测结果（TP-AC 已在上面直接填好）---
+    if ismember(lower(current_method), dac_methods)
+        Xi_consensus = Xi;
         for test_idx = 1:num_eval
             for dim_idx = 1:output_dim
-                mu_all_agents  = local_mu_at_testpoints(:, dim_idx, test_idx);
-                var_all_agents = local_var_at_testpoints(:, dim_idx, test_idx);
-                beta_all       = max(0.5*(log(prior_var)-log(var_all_agents)), eps);
-                switch base_method_name
-                    case 'moe'
-                        final_mu_pred(test_idx, dim_idx) = mean(mu_all_agents);
-                    case 'gpoe'
-                        prec = sum(beta_all ./ var_all_agents);
-                        final_mu_pred(test_idx, dim_idx) = sum(beta_all .* mu_all_agents ./ var_all_agents) / max(prec, eps);
-                    case 'poe'
-                        prec = sum(1 ./ var_all_agents);
-                        final_mu_pred(test_idx, dim_idx) = sum(mu_all_agents ./ var_all_agents) / max(prec, eps);
-                    case 'bcm'
-                        prec = sum(1 ./ var_all_agents) - (num_agents-1) / prior_var;
-                        final_mu_pred(test_idx, dim_idx) = sum(mu_all_agents ./ var_all_agents) / max(prec, eps);
-                    case 'rbcm'
-                        prec = sum(beta_all ./ var_all_agents) + (1 - sum(beta_all)) / prior_var;
-                        final_mu_pred(test_idx, dim_idx) = sum(beta_all .* mu_all_agents ./ var_all_agents) / max(prec, eps);
+                xi1_converged = mean(Xi_consensus(2*dim_idx-1, :, test_idx));
+                xi2_converged = mean(Xi_consensus(2*dim_idx,   :, test_idx));
+                if ismember(base_method_name, {'gpoe','poe','bcm','rbcm'})
+                    final_mu_pred(test_idx, dim_idx) = xi1_converged / max(xi2_converged, eps);
+                else
+                    final_mu_pred(test_idx, dim_idx) = xi1_converged / num_agents;
                 end
             end
         end
     end
 
-    %% 8. 方差聚合（DAC 和 AC 共用同样的方差公式）
+    %% 8. 方差聚合 (纯解析，不影响通信)
     for test_idx = 1:num_eval
         for dim_idx = 1:output_dim
             var_all_agents = local_var_at_testpoints(:, dim_idx, test_idx);
@@ -349,10 +329,15 @@ for method_idx = 1:numel(AllModes)
     smse_curve  = cumsum(err_sq_mean) ./ (1:num_eval)' / mean(Y_var_base);
     rmse_curve  = sqrt(cumsum(err_sq_mean) ./ (1:num_eval)');
 
+    event_count_test = 0;
+    trigger_count_per_agent = zeros(num_agents, num_eval); % 占位，保证保存格式一致
+
     save(fullfile(SaveFolder, sprintf('%s_tp_tr%d_mc%d.mat', current_method, tr_tag, seed)), ...
         'smse', 'rmse', 'nlpd', 't_train_gp', 't_test_total', ...
         't_train_per_point', 't_test_per_point', ...
         'comm_train', 'comm_test', 'iter_converge', ...
+        'neighbor_count_per_agent', 'num_directed_neighbor_links', 'neighbor_mask', ...
+        'trigger_count_per_agent', 'event_count_test', ...
         'current_method', 'seed', 'train_ratio', 'smse_curve', 'rmse_curve');
 end
 end

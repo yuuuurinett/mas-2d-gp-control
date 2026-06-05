@@ -77,8 +77,10 @@ end
 MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(AgentQuantity,1);
 L = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 
-N_degree = sum(L < 0, 2);
+N_degree = sum(L < 0, 2);              % |N_i|: 每个 agent 的邻居数量
 N_max    = max(N_degree);
+num_directed_neighbor_links = sum(N_degree);  % 一轮全图有向邻居交换次数
+num_undirected_edges = num_directed_neighbor_links / 2;
 sigma_i  = 0.5;
 a_param  = 0.5 / N_max;
 fprintf('ET 参数: sigma=%.2f  a=%.4f  (N_max=%d)\n', sigma_i, a_param, N_max);
@@ -157,6 +159,10 @@ for mi = 1:numel(AllModes)
     fprintf('\n[%d/%d] %s\n', mi, numel(AllModes), cur);
     tic;
 
+    % 默认诊断变量，保证 DAC/AC 保存字段一致。
+    event_count_mean = NaN;
+    trigger_count_per_agent = [];
+
     switch lower(cur)
         case dac_methods
             if     strcmpi(cur,'gpoe'), Pi=P_gpoe;
@@ -168,7 +174,11 @@ for mi = 1:numel(AllModes)
 
             Zeta   = zeros(p_dim, AgentQuantity, NumInducingPoints);
             Zeta_k = zeros(p_dim, AgentQuantity, NumInducingPoints);
-            trigger_count_set = zeros(AgentQuantity, 1);
+
+            % Point-wise 触发计数：
+            % trigger_count_per_agent(n,m) = agent n 在 inducing point m 上触发/广播了多少次。
+            % 这样最后可以统计“平均每个 inducing point 的邻居交换次数”。
+            trigger_count_per_agent = zeros(AgentQuantity, NumInducingPoints);
             iter = 0;
             max_iter = 3000;  % 安全上限，防止死循环
 
@@ -183,26 +193,40 @@ for mi = 1:numel(AllModes)
                         sum(diff .* reshape(L(n,:), 1, AgentQuantity, 1), 2);
                 end
 
-               % ET 触发判定：调整为智能体整体状态触发 (更符合经典 DAC 理论)
+                % ET 触发判定：point-wise 触发，每个 inducing point 独立判断。
+                % 这样通信次数统计的是“平均每个 inducing point 上发生了多少次邻居交换”，
+                % 更接近导师说的 neighbor exchange count，也避免把 2000 个点全量合成一个标量。
                 for n = 1:AgentQuantity
-                    % 1. 计算该 Agent 的整体误差：整个 inducing points 集合的状态差平方和
-                    % Zeta(:,n,:) 是 [p_dim x 1 x NumInducingPoints]
+                    % error_vec: [p_dim x 1 x NumInducingPoints]
+                    % 表示 agent n 当前真实状态 Zeta 与上一次广播状态 Zeta_k 的差。
                     error_vec = Zeta_k(:,n,:) - Zeta(:,n,:);
-                    rho_i     = sum(error_vec(:).^2); % 这里改为标量，代表该 Agent 的总误差
-                    
-                    % 2. 计算邻居驱动力：整个 induce point 集合的差值平方和
-                    z_i = sum((Zeta(:,n,:)-Zeta) .* reshape(L(n,:)<0,1,AgentQuantity,1), 2);
-                    norm_z_sq = sum(z_i(:).^2); % 这里改为标量
-                    
-                    % 3. 经典的 ET 触发阈值计算
+
+                    % z_i: [p_dim x 1 x NumInducingPoints]
+                    % 局部不一致度，z_i = sum_{j in N_i}(Zeta_i - Zeta_j)。
+                    z_i = sum((Zeta(:,n,:) - Zeta) .* reshape(L(n,:)<0, 1, AgentQuantity, 1), 2);
+
+                    % 对每个 inducing point，仅在 p_dim 维度上求平方和。
+                    % squeeze 后得到 [NumInducingPoints x 1]。
+                    norm_e_sq = squeeze(sum(error_vec.^2, 1));
+                    norm_z_sq = squeeze(sum(z_i.^2, 1));
+
+                    % 经典分布式 ET 阈值：e_i^2 <= coeff_i * z_i^2 + delta。
                     N_i = N_degree(n);
-                    delta_bound = 1e-6; % 减小这个值，确保收敛精度
-                    rho_bar_i = (sigma_i * a_param * (1 - a_param * N_i) / N_i) * norm_z_sq + delta_bound;
-                    
-                    % 4. 触发逻辑：只要 Agent 整体误差超过阈值，就全量更新
-                    if rho_i > rho_bar_i || iter == 1
-                        Zeta_k(:,n,:) = Zeta(:,n,:);
-                        trigger_count_set(n) = trigger_count_set(n) + 1;
+                    delta_bound = 1e-6;
+                    coeff_i = sigma_i * a_param * (1 - a_param * N_i) / N_i;
+                    rho_bar_vec = coeff_i * norm_z_sq + delta_bound;
+
+                    % 每个 inducing point 独立触发。
+                    trigger_idx = find(norm_e_sq > rho_bar_vec);
+
+                    % 第一次迭代强制广播所有 inducing points，完成初始化。
+                    if iter == 1
+                        trigger_idx = 1:NumInducingPoints;
+                    end
+
+                    if ~isempty(trigger_idx)
+                        Zeta_k(:, n, trigger_idx) = Zeta(:, n, trigger_idx);
+                        trigger_count_per_agent(n, trigger_idx) = trigger_count_per_agent(n, trigger_idx) + 1;
                     end
                 end           
 
@@ -213,9 +237,15 @@ for mi = 1:numel(AllModes)
             end
 
             iter_converge = iter;  % while 结束后直接就是收敛步数
-            comm_train = sum(trigger_count_set);
-            fprintf('  [Training ET] 收敛步数: %d  平均通信: %.1f次\n', iter_converge, comm_train);
+
+            % 通信统计口径：导师说的“和邻居交换的次数”。
+            % 对每个 inducing point m：sum_n trigger_count(n,m) * |N_n|
+            % 最后对所有 inducing points 取平均，得到平均每个 inducing point 的邻居交换次数。
+            event_count_mean = mean(sum(trigger_count_per_agent, 1));
+            comm_train = mean(sum(trigger_count_per_agent .* N_degree(:), 1));
             comm_test = 0;
+            fprintf('  [Training ET] 收敛步数: %d  平均Event: %.1f次/point  平均邻居交换: %.1f次/point\n', ...
+                iter_converge, event_count_mean, comm_train);
 
             Xi = Pi - Zeta;
             phi=zeros(y_dim,NumInducingPoints);
@@ -228,29 +258,49 @@ for mi = 1:numel(AllModes)
                 end
             end
 
-        case ac_methods
-            comm_train    = 1;
-            comm_test     = 0;
-            iter_converge = 1;
-            base=strrep(lower(cur),'_ac','');
-            phi=zeros(y_dim,NumInducingPoints);
-            for m=1:NumInducingPoints
-                for d=1:y_dim
-                    mu_a=squeeze(mu_ind(:,d,m)); va=squeeze(var_ind(:,d,m));
-                    b=max(0.5*(log(prior_var)-log(va)),eps);
-                    switch base
-                        case 'moe',  phi(d,m)=mean(mu_a);
-                        case 'gpoe', phi(d,m)=sum(b.*mu_a./va)/max(sum(b./va),eps);
-                        case 'poe',  phi(d,m)=sum(mu_a./va)/max(sum(1./va),eps);
+            case ac_methods
+            % IP-AC：在诱导点上直接一次性全局聚合，不需要迭代
+            if     strcmpi(cur,'gpoe_ac'), Pi=P_gpoe;
+            elseif strcmpi(cur,'poe_ac'),  Pi=P_poe;
+            elseif strcmpi(cur,'bcm_ac'),  Pi=P_bcm;
+            elseif strcmpi(cur,'rbcm_ac'), Pi=P_rbcm;
+            else,                          Pi=P_moe;
+            end
+
+            base_method = strrep(lower(cur),'_ac','');
+            phi = zeros(y_dim, NumInducingPoints);
+            for m = 1:NumInducingPoints
+                for d = 1:y_dim
+                    mu_all  = squeeze(mu_ind(:,d,m));
+                    var_all = squeeze(var_ind(:,d,m));
+                    beta_all = max(0.5*(log(prior_var)-log(var_all)), eps);
+                    switch base_method
+                        case 'moe'
+                            phi(d,m) = mean(mu_all);
+                        case 'gpoe'
+                            prec = sum(beta_all./var_all);
+                            phi(d,m) = sum(beta_all.*mu_all./var_all)/max(prec,eps);
+                        case 'poe'
+                            prec = sum(1./var_all);
+                            phi(d,m) = sum(mu_all./var_all)/max(prec,eps);
                         case 'bcm'
-                            prec=sum(1./va)-(AgentQuantity-1)/prior_var;
-                            phi(d,m)=sum(mu_a./va)/max(prec,eps);
+                            prec = sum(1./var_all)-(AgentQuantity-1)/prior_var;
+                            phi(d,m) = sum(mu_all./var_all)/max(prec,eps);
                         case 'rbcm'
-                            prec=sum(b./va)+(1-sum(b))/prior_var;
-                            phi(d,m)=sum(b.*mu_a./va)/max(prec,eps);
+                            prec = sum(beta_all./var_all)+(1-sum(beta_all))/prior_var;
+                            phi(d,m) = sum(beta_all.*mu_all./var_all)/max(prec,eps);
                     end
                 end
             end
+
+            comm_train    = 1;   % 一次性全局聚合，通信次数=1
+            comm_test     = 0;
+            iter_converge = 1;
+            event_count_mean = 1;
+            trigger_count_per_agent = zeros(AgentQuantity, NumInducingPoints);
+            fprintf('  [IP-AC] 直接聚合完成，comm_train=1\n');
+
+    
     end
 
     MaskedGP=LocalGP_MultiOutput(x_dim,y_dim,NumInducingPoints,1e-6,SigmaF,SigmaL);
@@ -287,6 +337,8 @@ for mi = 1:numel(AllModes)
         'smse', 'rmse', 'nlpd', 't_train', 't_test', ...
         't_train_per_point', 't_test_per_point', ...
         'comm_train', 'comm_test', 'iter_converge', ...
+        'event_count_mean', 'trigger_count_per_agent', 'N_degree', ...
+        'num_directed_neighbor_links', 'num_undirected_edges', ...
         'cur', 'seed', 'train_ratio', 'smse_curve', 'rmse_curve');
 end
 end
