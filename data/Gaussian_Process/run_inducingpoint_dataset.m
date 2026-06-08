@@ -68,8 +68,19 @@ L=MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 N_degree=sum(L<0,2); N_max=max(N_degree);
 num_directed_neighbor_links=sum(N_degree);
 num_undirected_edges=num_directed_neighbor_links/2;
-sigma_i=0.5; a_param=0.5/N_max;
-fprintf('ET参数: sigma=%.2f a=%.4f (N_max=%d)\n',sigma_i,a_param,N_max);
+% ET参数：Dimarogonas 2012 distributed event-triggered consensus
+% 触发条件： ||e_i||^2 > [sigma_i * a * (1-a*|N_i|)/|N_i|] * ||z_i||^2
+% 约束：0 < a < 1/|N_i|, 0 < sigma_i < 1。
+% 如果触发太少：减小 sigma_i / sigma_i_ac；如果触发太多：增大它们。
+a_param    = 0.5 / N_max;   % 自动满足 a < 1/max|N_i|
+sigma_i    = 0.5;           % IP-DAC用，越小触发越频繁
+sigma_i_ac = 0.5;           % IP-AC用，越小触发越频繁
+fprintf('ET参数: a=%.4g  sigma_DAC=%.4g  sigma_AC=%.4g  max|N_i|=%d\n', ...
+    a_param, sigma_i, sigma_i_ac, N_max);
+%fprintf('Topology degree N_i = '); disp(N_degree(:)');
+%fprintf('L row-sum max=%.2e, col-sum max=%.2e, symmetric=%d\n', ...
+    %max(abs(sum(L,2))), max(abs(sum(L,1))), isequal(L,L'));
+
 
 %% 4. 训练局部GP
 t_start=tic;
@@ -143,97 +154,245 @@ for mi=1:numel(AllModes)
     end
 
     iter=0; max_iter=3000;
-    Pi_scale=max(1,mean(Pi(:).^2));
-    conv_curve_dac = [];  % 初始化，DAC方法会填充
-    conv_curve_ac  = [];  % 初始化，AC方法会填充
+
+    % ============================================================
+    % Convergence diagnostics
+    % We only use one representative scalar component for the agent-state
+    % trajectories, but the error curves below are averaged over all
+    % p-dimensions and inducing points.
+    %   DAC test 1: tracking error to the average reference input
+    %   DAC test 2: inter-agent disagreement
+    %   AC  test 1: error to the initial average value
+    % ============================================================
+    conv_r = 1;      % representative information-vector dimension
+    conv_m = 1;      % representative inducing point
+
+    conv_curve_dac = [];                 % backward-compatible field
+    conv_curve_ac  = [];                 % backward-compatible field
+
+    conv_dac_tracking_curve     = [];
+    conv_dac_disagreement_curve = [];
+    conv_ac_avg_error_curve     = [];
+    conv_ac_disagreement_curve  = [];
+
+    dac_state_hist = [];
+    dac_ref_hist   = [];
+    ac_state_hist  = [];
+    ac_ref_hist    = [];
 
     if ismember(lower(cur),dac_methods)
-        %% IP-DAC：有reference signal，Dimarogonas 2012 ET
+        %% IP-DAC：严格区分“实时状态”和“广播快照”
+        % 状态定义：
+        %   Zeta              : DAC内部状态
+        %   Xi_now = Pi-Zeta  : 每个agent当前实时consensus输出 x_i(t)
+        %   Xi_last_trigger   : 上一次广播出去的快照 \hat{x}_i(t)
+        %
+        % 按事件触发论文的实现逻辑：
+        %   动力学/控制输入使用快照 \hat{x}（零阶保持）；
+        %   触发误差 e_i = \hat{x}_i - x_i 使用快照与实时值；
+        %   z_i = sum_j (x_i - x_j) 使用实时值 x_i, x_j。
         Zeta=zeros(p_dim,AgentQuantity,NumInducingPoints);
-        Zeta_k=zeros(p_dim,AgentQuantity,NumInducingPoints);
-        conv_curve_dac = zeros(max_iter,1);  % 收敛曲线
+        Xi_last_trigger=Pi;  % 初始时刻广播 x_i(0)=Pi_i
+
+        Pi_ref   = mean(Pi, 2);
+        Pi_scale = max(1, mean(Pi(:).^2)); %#ok<NASGU>
+
+        conv_dac_tracking_curve     = zeros(max_iter,1);
+        conv_dac_disagreement_curve = zeros(max_iter,1);
+        dac_state_hist = zeros(max_iter,AgentQuantity);
+        dac_ref_hist   = zeros(max_iter,1);
+        conv_curve_dac = zeros(max_iter,1);
+
         while iter<max_iter
             iter=iter+1; Zeta_prev=Zeta;
-            diff=Pi-Zeta;
-            for n=1:AgentQuantity
-                Zeta(:,n,:)=Zeta(:,n,:)+t_step*Kappa_P*...
-                    sum(diff.*reshape(L(n,:),1,AgentQuantity,1),2);
+
+            % 动力学：使用上一次广播快照 Xi_last_trigger，而不是实时Xi_now
+            % Zeta_dot = Kappa_P * L * Xi_hat
+            for agent_i=1:AgentQuantity
+                L_Xi_hat_i = sum(Xi_last_trigger .* reshape(L(agent_i,:),1,AgentQuantity,1), 2);
+                Zeta(:,agent_i,:) = Zeta(:,agent_i,:) + t_step*Kappa_P*L_Xi_hat_i;
             end
-            % 记录Xi=Pi-Zeta各agent间差异
+
+            % 当前实时consensus输出
             Xi_now = Pi - Zeta;
-            Xi_mean = mean(Xi_now, 2);
-            conv_curve_dac(iter) = mean(max(abs(Xi_now - Xi_mean), [], 2), 'all');
-            % ET触发条件（Dimarogonas 2012）
-            for n=1:AgentQuantity
-                for m=1:NumInducingPoints
-                    ef=Zeta_k(:,n,m)-Zeta(:,n,m);
-                    zf=sum((Zeta(:,n,m)-Zeta(:,:,m)).*reshape(L(n,:)<0,1,AgentQuantity),2);
-                    rho_i=sum(ef.^2); norm_z=sum(zf.^2);
-                    N_i=N_degree(n);
-                    coeff=sigma_i*a_param*(1-a_param*N_i)/N_i;
-                    rho_bar=max(1e-6*Pi_scale,min(1e-2*Pi_scale,coeff*norm_z));
-                    if rho_i>rho_bar||iter==1
-                        Zeta_k(:,n,m)=Zeta(:,n,m);
-                        trigger_count_per_agent(n,m)=trigger_count_per_agent(n,m)+1;
+
+            % 收敛诊断
+            dac_disagreement = abs(Xi_now - mean(Xi_now,2));
+            conv_dac_tracking_curve(iter)     = mean(max(abs(Xi_now-Pi_ref),[],2),'all');
+            conv_dac_disagreement_curve(iter) = mean(max(dac_disagreement,[],2),'all');
+            dac_state_hist(iter,:) = squeeze(Xi_now(conv_r,:,conv_m));
+            dac_ref_hist(iter)     = mean(squeeze(Pi(conv_r,:,conv_m)));
+            conv_curve_dac(iter)   = conv_dac_disagreement_curve(iter);
+
+            % ET触发条件（point-wise）
+            % e_i 用广播快照：e_i = xhat_i - x_i
+            % z_i 用实时状态：z_i = sum_{j in N_i}(x_i - x_j)
+            for agent_i = 1:AgentQuantity
+                neighbor_mask_i = (L(agent_i,:) < 0);
+                for m = 1:NumInducingPoints
+                    e_tilde_i = Xi_last_trigger(:,agent_i,m) - Xi_now(:,agent_i,m);
+                    z_i = sum(Xi_now(:,agent_i,m) - Xi_now(:,neighbor_mask_i,m), 2);
+
+                    N_i = N_degree(agent_i);
+                    coeff_i = sigma_i * a_param * (1 - a_param*N_i) / N_i;
+                    threshold_i = coeff_i * sum(z_i.^2);
+                    if sum(e_tilde_i.^2) > threshold_i || iter == 1
+                        Xi_last_trigger(:,agent_i,m) = Xi_now(:,agent_i,m);
+                        trigger_count_per_agent(agent_i,m) = trigger_count_per_agent(agent_i,m) + 1;
                     end
                 end
             end
+
             if max(abs(Zeta(:)-Zeta_prev(:)))<1e-5, break; end
         end
         iter_converge=iter;
+
+        conv_dac_tracking_curve     = conv_dac_tracking_curve(1:iter_converge);
+        conv_dac_disagreement_curve = conv_dac_disagreement_curve(1:iter_converge);
+        dac_state_hist = dac_state_hist(1:iter_converge,:);
+        dac_ref_hist   = dac_ref_hist(1:iter_converge);
         conv_curve_dac = conv_curve_dac(1:iter_converge);
-        comm_train=mean(trigger_count_per_agent(:));
-        comm_test=0;
-        fprintf('  [IP-DAC] 收敛步数:%d  触发次数/agent:%.1f\n',iter_converge,comm_train);
+
+        % 导师口径：通信次数 = 触发次数
+        % 主表报告 per-agent / per-inducing-point 的平均触发次数，
+        % 与 Dimarogonas paper 中“每个 agent 的通信/更新次数”口径一致。
+        % ============================================================
+        % Communication metric for IP-DAC
+        % Official metric: mean event-trigger count per agent per inducing point
+        % This follows the paper-style interpretation: communication count = trigger count.
+        % ============================================================
+
+        trigger_per_agent_point = mean(trigger_count_per_agent, 2);  % [AgentQuantity x 1]
+        comm_train = mean(trigger_count_per_agent(:));               % scalar, official Comm_Train
+        comm_test  = 0;
+
+        % Optional diagnostic variables, not used as the main metric
+        trigger_total_per_point = sum(trigger_count_per_agent, 1);   % [1 x NumInducingPoints]
+        trigger_total_mean_per_point = mean(trigger_total_per_point);
+
+        fprintf('  [IP-DAC] 收敛步数:%d  平均触发次数/agent/point:%.1f\n', ...
+            iter_converge, comm_train);
+
+        %fprintf('    mean trigger per agent/point: ');
+        %fprintf('%.4f  ', trigger_per_agent_point);
+        %fprintf('\n');
+
+%fprintf('    diagnostic only: total trigger per point mean = %.1f\n', ...
+    %trigger_total_mean_per_point);
         Xi_final=Pi-Zeta;
     else
-        %% IP-AC：无reference signal，纯共识，Dimarogonas 2012 ET
-        Xi=Pi; Xi_k=Pi;
+        %% IP-AC：静态平均一致性，也严格区分实时状态和广播快照
+        %   Xi              : 当前实时状态 x_i(t)
+        %   Xi_last_trigger : 上一次广播快照 \hat{x}_i(t)
+        % 动力学使用快照： xdot = -Kappa_P * L * xhat
+        % 触发条件中：
+        %   e_i = xhat_i - x_i 用快照与实时值；
+        %   z_i = sum_j(x_i - x_j) 用实时值。
+        Xi=Pi;
+        Xi_last_trigger=Pi;
+
+        % AC reference is the initial average. This is fixed by definition:
+        % x_i(k) should converge to mean_i x_i(0).
+        Xi_ref0 = mean(Pi, 2);  % [p_dim x 1 x NumInducingPoints]
+
+        conv_ac_avg_error_curve    = zeros(max_iter,1);
+        conv_ac_disagreement_curve = zeros(max_iter,1);
+        ac_state_hist = zeros(max_iter,AgentQuantity);
+        ac_ref_hist   = zeros(max_iter,1);
         conv_curve_ac = zeros(max_iter,1);
+
         while iter<max_iter
             iter=iter+1; Xi_prev=Xi;
-            L_Xi=zeros(size(Xi));
-            for n=1:AgentQuantity
-                L_Xi(:,n,:)=sum(Xi.*reshape(L(n,:),1,AgentQuantity,1),2);
+
+            % 动力学：使用广播快照 Xi_last_trigger
+            % xdot = -Kappa_P * L * xhat
+            for agent_i=1:AgentQuantity
+                L_Xi_hat_i = sum(Xi_last_trigger .* reshape(L(agent_i,:),1,AgentQuantity,1), 2);
+                Xi(:,agent_i,:) = Xi(:,agent_i,:) - t_step*Kappa_P*L_Xi_hat_i;
             end
-            for n=1:AgentQuantity
-                Xi(:,n,:)=Xi(:,n,:)-t_step*Kappa_P*L_Xi(:,n,:);
-            end
-            % 记录收敛曲线
-            Xi_mean_now = mean(Xi,2);
-            conv_curve_ac(iter) = mean(max(abs(Xi-Xi_mean_now),[],2),'all');
-            % ET触发条件（Dimarogonas 2012）
-            for n=1:AgentQuantity
-                for m=1:NumInducingPoints
-                    ef=Xi_k(:,n,m)-Xi(:,n,m);
-                    zf=sum((Xi(:,n,m)-Xi(:,:,m)).*reshape(L(n,:)<0,1,AgentQuantity),2);
-                    rho_i=sum(ef.^2); norm_z=sum(zf.^2);
-                    N_i=N_degree(n);
-                    coeff=sigma_i*a_param*(1-a_param*N_i)/N_i;
-                    rho_bar=max(1e-6*Pi_scale,min(1e-3*Pi_scale,coeff*norm_z));
-                    if rho_i>rho_bar||iter==1
-                        Xi_k(:,n,m)=Xi(:,n,m);
-                        trigger_count_per_agent(n,m)=trigger_count_per_agent(n,m)+1;
+
+            % AC convergence diagnostic
+            % AC should converge to the initial average value, not to zero.
+            ac_avg_err      = abs(Xi - Xi_ref0);
+            ac_disagreement = abs(Xi - mean(Xi,2));
+
+            conv_ac_avg_error_curve(iter)    = mean(max(ac_avg_err, [], 2), 'all');
+            conv_ac_disagreement_curve(iter) = mean(max(ac_disagreement, [], 2), 'all');
+
+            ac_state_hist(iter,:) = squeeze(Xi(conv_r,:,conv_m));
+            ac_ref_hist(iter)     = mean(squeeze(Pi(conv_r,:,conv_m)));
+            conv_curve_ac(iter)   = conv_ac_avg_error_curve(iter);
+
+            % ET触发条件（point-wise）
+            % e_i 用广播快照，z_i 用实时状态
+            for agent_i = 1:AgentQuantity
+                neighbor_mask_i = (L(agent_i,:) < 0);
+                for m = 1:NumInducingPoints
+                    e_tilde_i = Xi_last_trigger(:,agent_i,m) - Xi(:,agent_i,m);
+                    z_i = sum(Xi(:,agent_i,m) - Xi(:,neighbor_mask_i,m), 2);
+
+                    N_i = N_degree(agent_i);
+                    coeff_i = sigma_i_ac * a_param * (1 - a_param*N_i) / N_i;
+                    threshold_i = coeff_i * sum(z_i.^2);
+                    if sum(e_tilde_i.^2) > threshold_i || iter == 1
+                        Xi_last_trigger(:,agent_i,m) = Xi(:,agent_i,m);
+                        trigger_count_per_agent(agent_i,m) = trigger_count_per_agent(agent_i,m) + 1;
                     end
                 end
             end
+
             if max(abs(Xi(:)-Xi_prev(:)))<1e-5, break; end
         end
         iter_converge=iter;
+
+        conv_ac_avg_error_curve    = conv_ac_avg_error_curve(1:iter_converge);
+        conv_ac_disagreement_curve = conv_ac_disagreement_curve(1:iter_converge);
+        ac_state_hist = ac_state_hist(1:iter_converge,:);
+        ac_ref_hist   = ac_ref_hist(1:iter_converge);
         conv_curve_ac = conv_curve_ac(1:iter_converge);
+
         conv_curve_dac = [];  % AC分支，DAC曲线为空
-        comm_train=mean(trigger_count_per_agent(:));
-        comm_test=0;
-        fprintf('  [IP-AC] 收敛步数:%d  触发次数/agent:%.1f\n',iter_converge,comm_train);
+
+        % 导师口径：通信次数 = 触发次数
+        % AC分支同样报告 per-agent / per-point 的平均触发次数；
+        % total per point 只作为诊断信息保存和打印。
+        % ============================================================
+        % Communication metric for IP-AC
+        % Official metric: mean update/trigger count per agent per inducing point
+        % ============================================================
+
+        trigger_per_agent_point = mean(trigger_count_per_agent, 2);  % [AgentQuantity x 1]
+        comm_train = mean(trigger_count_per_agent(:));               % scalar, official Comm_Train
+        comm_test  = 0;
+
+        trigger_total_per_point = sum(trigger_count_per_agent, 1);   % diagnostic only
+        trigger_total_mean_per_point = mean(trigger_total_per_point);
+
+        fprintf('  [IP-AC] 收敛步数:%d  平均更新次数/agent/point:%.1f\n', ...
+            iter_converge, comm_train);
+
+        %fprintf('    mean update per agent/point: ');
+        %fprintf('%.4f  ', trigger_per_agent_point);
+        %fprintf('\n');
+
+        %fprintf('    diagnostic only: total update per point mean = %.1f\n', ...
+            %trigger_total_mean_per_point);
         Xi_final=Xi;
     end  %% if/else结束
 
-    %% 提取phi（IP-DAC用Pi-Zeta，IP-AC用Xi）
+    %% 提取phi（DAC/AC收敛后直接用Xi_final）
     phi=zeros(y_dim,NumInducingPoints);
     for d=1:y_dim
-        xi1=squeeze(Xi_final(2*d-1,1,:))'; xi2=squeeze(Xi_final(2*d,1,:))';
+        xi1=squeeze(Xi_final(2*d-1,1,:))';
+        xi2=squeeze(Xi_final(2*d,  1,:))';
         if ismember(base_method,{'gpoe','poe','bcm','rbcm'})
-            phi(d,:)=xi1./max(xi2,eps);
+            % 防止分母除零，但保留 denominator 的符号。
+            % 不再使用 abs(xi2)，否则 BCM/rBCM 的先验修正项可能被改变符号。
+            den = xi2;
+            small_den = abs(den) < 1e-4;
+            den(small_den & den >= 0) = 1e-4;
+            den(small_den & den <  0) = -1e-4;
+            phi(d,:) = xi1 ./ den;
         else
             phi(d,:)=xi1/AgentQuantity;
         end
@@ -255,7 +414,9 @@ for mi=1:numel(AllModes)
     t_test=toc;
 
     err=Y_eval-mu_pred;
-    smse=mean(mean(err.^2)./Y_var_base);
+    % 防弹衣3：Y_var_base为0时（静态常数测试集）用1代替
+    Y_var_base_safe = max(Y_var_base, 1e-10);
+    smse=mean(mean(err.^2)./Y_var_base_safe);
     rmse=mean(sqrt(mean(err.^2)));
     nlpd=mean(mean(0.5*(log(2*pi*var_pred)+err.^2./var_pred)));
     t_train_per_point=(t_train/N_train)*1000;
@@ -263,18 +424,32 @@ for mi=1:numel(AllModes)
     fprintf('  SMSE=%.4f RMSE=%.4f NLPD=%.4f Train:%.2fms/pt Test:%.2fms/pt\n',...
         smse,rmse,nlpd,t_train_per_point,t_test_per_point);
 
+    % Compatibility variables expected by run_mc_dataset / plotting scripts
+    t_train_total = t_train;
+    t_test_total  = t_test;
+    current_method = cur;
+
     err_sq_mean=mean(err.^2,2);
-    smse_curve=cumsum(err_sq_mean)./(1:N_eval)'/mean(Y_var_base);
+    smse_curve=cumsum(err_sq_mean)./(1:N_eval)'/mean(Y_var_base_safe);
     rmse_curve=sqrt(cumsum(err_sq_mean)./(1:N_eval)');
     event_count_mean=comm_train;
 
-    save(fullfile(SaveFolder,sprintf('%s_tr%d_mc%d.mat',cur,tr_tag,seed)),...
-        'smse','rmse','nlpd','t_train','t_test',...
-        't_train_per_point','t_test_per_point',...
-        'comm_train','comm_test','iter_converge',...
-        'event_count_mean','trigger_count_per_agent','N_degree',...
-        'num_directed_neighbor_links','num_undirected_edges',...
-        'conv_curve_dac','conv_curve_ac',...
-        'cur','seed','train_ratio','smse_curve','rmse_curve');
+    save(fullfile(SaveFolder, sprintf('%s_tr%d_mc%d.mat', current_method, tr_tag, seed)), ...
+        'smse', 'rmse', 'nlpd', ...
+        't_train_total', 't_test_total', ...
+        't_train_per_point', 't_test_per_point', ...
+        'comm_train', 'comm_test', 'iter_converge', ...
+        'event_count_mean', ...
+        'current_method', 'seed', 'train_ratio', ...
+        'smse_curve', 'rmse_curve', ...
+        'trigger_count_per_agent', ...
+        'trigger_per_agent_point', ...
+        'trigger_total_per_point', ...
+        'trigger_total_mean_per_point', ...
+        'conv_curve_dac', 'conv_curve_ac', ...
+        'conv_dac_tracking_curve', 'conv_dac_disagreement_curve', ...
+        'conv_ac_avg_error_curve', 'conv_ac_disagreement_curve', ...
+        'dac_state_hist', 'dac_ref_hist', ...
+        'ac_state_hist', 'ac_ref_hist');
 end
 end
