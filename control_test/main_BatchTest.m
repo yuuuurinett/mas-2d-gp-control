@@ -2,9 +2,9 @@
 clc; close all;
 
 %% 配置
-CurrentMode  = 'poe';   % 'poe'|'gpoe'|'moe'|'bcm'|'rbcm' 或 'all'
-TestType     = 'inducing';   % 'test'|'inducing'|'cen'|'nbr'|'all'
-use_formation = false;   % true = 有formation，false = 无formation
+CurrentMode  = 'all';   % 'poe'|'gpoe'|'moe'|'bcm'|'rbcm' 或 'all'
+TestType     = 'all';   % 'test'|'inducing'|'cen'|'nbr'|'all'
+use_formation = true;   % true = 有formation，false = 无formation
 
 % 文件名后缀，方便两次结果共存
 form_tag = 'formation';
@@ -32,10 +32,15 @@ else
 end
 
 %% 1. 运行仿真
-run_inducing = ismember(lower(TestType), {'inducing','all'});
-run_test     = ismember(lower(TestType), {'test','all'});
-run_cen      = ismember(lower(TestType), {'cen','all'});
-run_nbr      = ismember(lower(TestType), {'nbr','all'});
+%run_inducing = ismember(lower(TestType), {'inducing','all'});
+%run_test     = ismember(lower(TestType), {'test','all'});
+%run_cen      = ismember(lower(TestType), {'cen','all'});
+%run_nbr      = ismember(lower(TestType), {'nbr','all'});
+
+run_inducing = false;
+run_test     = false;
+run_cen      = false;
+run_nbr      = false;
 
 if run_inducing
     AllModes_ind = [Modes_dac, Modes_ac, Modes_baseline];
@@ -124,25 +129,43 @@ end
 Err_Local = load_err(SaveFolder_Test, sprintf('local_%s', form_tag));
 Err_Exact = load_err(SaveFolder_Test, sprintf('exact_%s', form_tag));
 
+% IP-DAC ET 触发次数
+Comm_IP_DAC = nan(numel(Modes_dac), 1);
+for m = 1:numel(Modes_dac)
+    fpath = fullfile(SaveFolder_Inducing, sprintf('%s_%s.mat', Modes_dac{m}, form_tag));
+    if exist(fpath, 'file')
+        d = load(fpath, 'total_trigger_count');
+        if isfield(d, 'total_trigger_count')
+            Comm_IP_DAC(m) = mean(d.total_trigger_count);
+        end
+    end
+end
+
 %% 3. 打印汇总表格
-fprintf('\n%s\n', repmat('=',1,80));
+fprintf('\n%s\n', repmat('=',1,90));
 fprintf('  Final Tracking Error ||e(T)||  [%s]\n', form_tag);
-fprintf('  %-10s  %-8s  %-8s  %-8s  %-8s  %-8s  %-8s\n', ...
-    'Method','IP-DAC','IP-AC','TP-DAC','TP-AC','CEN','NBR');
-fprintf('  %s\n', repmat('-',1,76));
+fprintf('  %-10s  %-8s  %-8s  %-8s  %-8s  %-8s  %-8s  %-12s\n', ...
+    'Method','IP-DAC','IP-AC','TP-DAC','TP-AC','CEN','NBR','IP-DAC Comm');
+fprintf('  %s\n', repmat('-',1,86));
 for m=1:numel(Modes_dac)
-    fprintf('  %-10s  %-8.4f  %-8.4f  %-8.4f  %-8.4f  %-8.4f  %-8.4f\n', ...
+    if ~isnan(Comm_IP_DAC(m))
+        comm_str = sprintf('%.1f', Comm_IP_DAC(m));
+    else
+        comm_str = '-';
+    end
+    fprintf('  %-10s  %-8.4f  %-8.4f  %-8.4f  %-8.4f  %-8.4f  %-8.4f  %-12s\n', ...
         Modes_dac{m}, ...
         Err_IP_DAC(m,end), Err_IP_AC(m,end), ...
         Err_TP_DAC(m,end), Err_TP_AC(m,end), ...
-        Err_CEN(m,end),    Err_NBR(m,end));
+        Err_CEN(m,end),    Err_NBR(m,end), ...
+        comm_str);
 end
-fprintf('%s\n\n', repmat('=',1,80));
+fprintf('%s\n\n', repmat('=',1,90));
 
 % Local 和 Exact 单独打印
 fprintf('  %-10s  %-8.4f\n', 'Local', Err_Local(end));
 fprintf('  %-10s  %-8.4f\n', 'Exact', Err_Exact(end));
-fprintf('%s\n\n', repmat('=',1,80));
+fprintf('%s\n\n', repmat('=',1,90));
 
 %% 4. 绘图
 lw = 1.5;

@@ -71,7 +71,7 @@ fprintf('SigmaF=%.4f  SigmaN=%.4f\n', hp.SigmaF, hp.SigmaN);
 
 %% 3. 改为参数化控制 
 Node_Capacity      = 500;    % 每个局部 GP 的最大物理容量
-Target_Fill_Rate   = 0.50;   % 导师要求的 40% 填充率
+Target_Fill_Rate   = 0.50;   
 
 % 计算每个节点实际承载的样本数
 % 即：每个节点最多装 100 个点，但我们只给它塞 40 个点就分裂

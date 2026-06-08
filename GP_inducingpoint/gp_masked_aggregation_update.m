@@ -3,13 +3,6 @@ function [MaskedGP, Zeta_vector, Zeta_last_trigger, trigger_count] = gp_masked_a
     Kappa_P, AgentQuantity, NumInducingPoints, TimeStep, ...
     InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, method, p_dim, ...
     Zeta_last_trigger, et_sigma, et_a, neighbor_count)
-% 新增参数：
-%   Zeta_last_trigger [p_dim × AgentQuantity × M]：上次触发时的广播值
-%   et_sigma, et_a：ET 参数
-%   neighbor_count [AgentQuantity × 1]：每个 agent 的邻居数量
-% 新增输出：
-%   Zeta_last_trigger：更新后的广播值
-%   trigger_count [AgentQuantity × 1]：本步各 agent 的触发次数（0或1）
 
 method    = lower(method);
 M         = NumInducingPoints;
@@ -18,45 +11,44 @@ prior_var = SigmaF^2;
 
 trigger_count = zeros(AgentQuantity, 1);
 
-%% Step 1: DAC 更新（Euler 离散化）+ ET 触发判定
+%% Step 1: DAC 积分（ode45，和原版一致，保证数值稳定）
 if TimeStep > 0
-
-    % --- Euler 更新：对所有诱导点同时做一步 ---
-    % Zeta_vector: [p_dim × AgentQuantity × M]
-    % dZeta/dt = Kappa * (P - Zeta) * L'
-    % 用 last_trigger 值参与共识（ET 核心：用广播值而非实时值）
     for InducingPointIdx = 1:M
-        P_m             = P(:, :, InducingPointIdx);             % [p_dim × AgentQuantity]
-        Zeta_m          = Zeta_vector(:, :, InducingPointIdx);   % [p_dim × AgentQuantity]
-        Zeta_trigger_m  = Zeta_last_trigger(:, :, InducingPointIdx); % [p_dim × AgentQuantity]
+        P_InducingPoint    = P(:, :, InducingPointIdx);
+        Zeta_InducingPoint = Zeta_vector(:, :, InducingPointIdx);
 
-        % 共识输入用广播值
-        consensus_input = P_m - Zeta_trigger_m;  % [p_dim × AgentQuantity]
-        dZeta = Kappa_P * consensus_input * L';   % [p_dim × AgentQuantity]
-        Zeta_vector(:, :, InducingPointIdx) = Zeta_m + TimeStep * dZeta;
+        New_Consensus_Zeta_function = @(~, Zeta_ODE_Intern) Compute_New_Consensus_Derivative( ...
+            Zeta_ODE_Intern, P_InducingPoint, L, Kappa_P, AgentQuantity, p_dim);
+
+        [~, Zeta_ODE_Output] = ode45(New_Consensus_Zeta_function, ...
+            [0, TimeStep], Zeta_InducingPoint(:));
+
+        Zeta_vector(:, :, InducingPointIdx) = reshape(Zeta_ODE_Output(end,:)', ...
+            p_dim, AgentQuantity);
     end
 
-    % --- ET 触发判定：对每个 agent，合并所有诱导点 ---
-    % 对应 Dimarogonas 2012 公式(11)：
-    %   ||e_i||² ≤ σ·a·(1-a·|N_i|)/|N_i| · ||z_i||²
+    %% Step 2: ET 触发判定（Dimarogonas 2012 公式11）
+    % ET 控制的是"是否需要重建 MaskedGP"
+    % 对每个 agent，把所有诱导点展平成一个大向量判断
     for agent_idx = 1:AgentQuantity
-        % e_i = Zeta_last_trigger_i - Zeta_i（上次广播值与当前值之差）
-        % 展平所有诱导点：[p_dim × M] → [p_dim*M × 1]
-        error_i = Zeta_last_trigger(:, agent_idx, :) - Zeta_vector(:, agent_idx, :);
+        % e_i = Zeta_last_trigger_i - Zeta_i
+        error_i      = Zeta_last_trigger(:, agent_idx, :) - Zeta_vector(:, agent_idx, :);
         error_i_flat = reshape(error_i, [], 1);
 
-        % z_i = sum_{j∈N_i}(Zeta_i - Zeta_j)，用实时值计算
-        neighbor_mask = reshape(L(agent_idx,:) < 0, 1, AgentQuantity, 1);
-        relative_diff = sum((Zeta_vector(:, agent_idx, :) - Zeta_vector) .* neighbor_mask, 2);
+        % z_i = sum_{j∈N_i}(Zeta_i - Zeta_j)
+        neighbor_mask      = reshape(L(agent_idx,:) < 0, 1, AgentQuantity, 1);
+        relative_diff      = sum((Zeta_vector(:,agent_idx,:) - Zeta_vector) .* neighbor_mask, 2);
         relative_diff_flat = reshape(relative_diff, [], 1);
 
         rho_i     = sum(error_i_flat .^ 2);
         norm_z_sq = sum(relative_diff_flat .^ 2);
 
-        N_i = neighbor_count(agent_idx);
-        rho_bar_i = max((et_sigma * et_a * (1 - et_a * N_i) / N_i) * norm_z_sq, 1e-8);
+        N_i       = neighbor_count(agent_idx);
+        % rho_bar_i 加上下界（防止收敛后持续触发）和上界（防止阈值过大触发太少）
+        rho_bar_i = (et_sigma * et_a * (1 - et_a * N_i) / N_i) * norm_z_sq;
+        rho_bar_i = min(rho_bar_i, 1e-3);  % 上界
+        rho_bar_i = max(rho_bar_i, 1e-8);  % 下界
 
-        % 触发：||e_i||² > rho_bar_i
         if rho_i > rho_bar_i
             Zeta_last_trigger(:, agent_idx, :) = Zeta_vector(:, agent_idx, :);
             trigger_count(agent_idx) = 1;
@@ -64,8 +56,8 @@ if TimeStep > 0
     end
 end
 
-%% Step 2: 从收敛后的 Zeta 提取聚合预测
-Xi_all = P - Zeta_vector;   % [p_dim × AgentQuantity × M]
+%% Step 3: 从 Zeta 提取聚合预测，重建 MaskedGP
+Xi_all = P - Zeta_vector;
 
 switch method
     case {'poe', 'gpoe', 'moe'}
@@ -108,7 +100,9 @@ switch method
         phi2(mask2) = num2(mask2) ./ den2_fused(mask2);
 end
 
-%% Step 3: 重建 MaskedGP
+phi1(~isfinite(phi1)) = 0;
+phi2(~isfinite(phi2)) = 0;
+
 MaskedGP = cell(AgentQuantity, 1);
 for AgentNr = 1:AgentQuantity
     Y_agent = [phi1(AgentNr, :); phi2(AgentNr, :)];
@@ -116,4 +110,13 @@ for AgentNr = 1:AgentQuantity
     MaskedGP{AgentNr}.add_Alldata(InducingPoints_Coordinates, Y_agent);
 end
 
+end
+
+%% 子函数：计算 DAC 动力学导数
+function dZeta_dt = Compute_New_Consensus_Derivative(...
+    Zeta_vec, P_Ref, L, Kappa, AgentQuantity, p_dim)
+
+Zeta = reshape(Zeta_vec, p_dim, AgentQuantity);
+dZeta_dt = Kappa * (P_Ref - Zeta) * L';
+dZeta_dt = dZeta_dt(:);
 end

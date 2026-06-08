@@ -11,7 +11,7 @@ INSET_MAX_TEST  = [0.15, 0.40, 0.35, 0.60];
 datasets = {'KIN40K', 'POL', 'PUMADYN32NM', 'SARCOS'};
 aggs     = {'moe', 'gpoe', 'poe', 'bcm', 'rbcm'};
 train_ratio = 40;
-n_mc = 5; 
+n_mc = 1; 
 
 archs = {
     'LoG',    'log_%s_mc%d.mat';

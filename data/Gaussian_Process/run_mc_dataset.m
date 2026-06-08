@@ -9,7 +9,7 @@ fprintf('======================================================\n');
 
 %%  1. 全局配置区域
 %datasets    = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
-datasets    = {'KIN40K'};
+ datasets    = {'KIN40K'};
 train_ratio = 0.4;
 n_mc        = 1;
 

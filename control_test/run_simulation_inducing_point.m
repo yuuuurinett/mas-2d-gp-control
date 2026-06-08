@@ -93,8 +93,8 @@ if ismember(lower(CurrentMode), dac_methods)
     % ET 参数初始化
     neighbor_count_per_agent = sum(L_lap < 0, 2);  % [AgentQuantity × 1]
     max_neighbor_count       = max(neighbor_count_per_agent);
-    et_sigma = 0.5;
-    et_a     = 0.5 / max_neighbor_count;
+    et_sigma = 0.2;
+    et_a     = 0.9 / max_neighbor_count;
     Zeta_last_trigger = zeros(p_dim, AgentQuantity, NumInducingPoints);
     total_trigger_count = zeros(AgentQuantity, 1);
 
@@ -124,6 +124,7 @@ TrackingError_vector = zeros(1, T);
 % 初始化预测值和真实动力学记录
 f_hat_all_set  = nan(y_dim, AgentQuantity, T);
 f_true_all_set = nan(y_dim, AgentQuantity, T);
+total_trigger_count = zeros(AgentQuantity, 1);  % ET触发次数，非DAC方法保持为0
 
 %% 9. Control Loop
 opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);  % 松容差，配合 ode45
@@ -157,12 +158,16 @@ for t_Nr = 1:T-1
                 mu_hat = max(-30, min(30, mu_hat));
                 f_hat_matrix(:,n) = mu_hat;
             end
-            [MaskedGP, Zeta_vector_inducing, Zeta_last_trigger, step_triggers] = ...
+            [MaskedGP_new, Zeta_vector_inducing, Zeta_last_trigger, step_triggers] = ...
                 gp_masked_aggregation_update( ...
                 P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
                 NumInducingPoints, t_step, InducingPoints_Coordinates, ...
                 SigmaF, SigmaL, x_dim, base_method, p_dim, ...
                 Zeta_last_trigger, et_sigma, et_a, neighbor_count_per_agent);
+            % 只有任意 agent 触发时才更新 MaskedGP
+            if any(step_triggers)
+                MaskedGP = MaskedGP_new;
+            end
             total_trigger_count = total_trigger_count + step_triggers;
         case ac_methods
             for n = 1:AgentQuantity
