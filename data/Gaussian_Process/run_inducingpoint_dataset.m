@@ -73,8 +73,8 @@ num_undirected_edges=num_directed_neighbor_links/2;
 % 约束：0 < a < 1/|N_i|, 0 < sigma_i < 1。
 % 如果触发太少：减小 sigma_i / sigma_i_ac；如果触发太多：增大它们。
 a_param    = 0.5 / N_max;   % 自动满足 a < 1/max|N_i|
-sigma_i    = 0.5;           % IP-DAC用，越小触发越频繁
-sigma_i_ac = 0.5;           % IP-AC用，越小触发越频繁
+sigma_i    = 0.5;           % IP-DAC和IP-AC统一使用，便于对比
+sigma_i_ac = 0.5;           % 和sigma_i相同，确保对比公平
 fprintf('ET参数: a=%.4g  sigma_DAC=%.4g  sigma_AC=%.4g  max|N_i|=%d\n', ...
     a_param, sigma_i, sigma_i_ac, N_max);
 %fprintf('Topology degree N_i = '); disp(N_degree(:)');
@@ -206,12 +206,13 @@ for mi=1:numel(AllModes)
         while iter<max_iter
             iter=iter+1; Zeta_prev=Zeta;
 
-            % 动力学：使用上一次广播快照 Xi_last_trigger，而不是实时Xi_now
-            % Zeta_dot = Kappa_P * L * Xi_hat
-            for agent_i=1:AgentQuantity
-                L_Xi_hat_i = sum(Xi_last_trigger .* reshape(L(agent_i,:),1,AgentQuantity,1), 2);
-                Zeta(:,agent_i,:) = Zeta(:,agent_i,:) + t_step*Kappa_P*L_Xi_hat_i;
-            end
+            % 动力学向量化：Zeta_dot = Kappa_P * L * Xi_hat
+            % permute: [p_dim x N x M] → [N x p_dim x M] → [N x p_dim*M]
+            Xi_hat_perm = permute(Xi_last_trigger, [2 1 3]);  % [N x p_dim x M]
+            Xi_hat_2d   = reshape(Xi_hat_perm, AgentQuantity, p_dim*NumInducingPoints);  % [N x p_dim*M]
+            L_Xi_hat_2d = L * Xi_hat_2d;  % [N x p_dim*M]
+            L_Xi_hat    = permute(reshape(L_Xi_hat_2d, AgentQuantity, p_dim, NumInducingPoints), [2 1 3]);  % [p_dim x N x M]
+            Zeta = Zeta + t_step * Kappa_P * L_Xi_hat;
 
             % 当前实时consensus输出
             Xi_now = Pi - Zeta;
@@ -224,23 +225,31 @@ for mi=1:numel(AllModes)
             dac_ref_hist(iter)     = mean(squeeze(Pi(conv_r,:,conv_m)));
             conv_curve_dac(iter)   = conv_dac_disagreement_curve(iter);
 
-            % ET触发条件（point-wise）
-            % e_i 用广播快照：e_i = xhat_i - x_i
-            % z_i 用实时状态：z_i = sum_{j in N_i}(x_i - x_j)
+            % ET触发条件（point-wise向量化，消除内层for m循环）
+            % e_i = x̂_i - x_i（广播快照 - 实时状态）
+            % z_i = Σ_{j∈N_i}(x_i - x_j)（实时状态的邻居差）
             for agent_i = 1:AgentQuantity
                 neighbor_mask_i = (L(agent_i,:) < 0);
-                for m = 1:NumInducingPoints
-                    e_tilde_i = Xi_last_trigger(:,agent_i,m) - Xi_now(:,agent_i,m);
-                    z_i = sum(Xi_now(:,agent_i,m) - Xi_now(:,neighbor_mask_i,m), 2);
+                N_i = N_degree(agent_i);
+                coeff_i = sigma_i * a_param * (1 - a_param*N_i) / N_i;
 
-                    N_i = N_degree(agent_i);
-                    coeff_i = sigma_i * a_param * (1 - a_param*N_i) / N_i;
-                    threshold_i = coeff_i * sum(z_i.^2);
-                    if sum(e_tilde_i.^2) > threshold_i || iter == 1
-                        Xi_last_trigger(:,agent_i,m) = Xi_now(:,agent_i,m);
-                        trigger_count_per_agent(agent_i,m) = trigger_count_per_agent(agent_i,m) + 1;
-                    end
-                end
+                % e_tilde：[p_dim x 1 x M]
+                e_tilde_all = Xi_last_trigger(:,agent_i,:) - Xi_now(:,agent_i,:);
+                % z_i：对所有邻居求和，[p_dim x 1 x M]
+                z_all = sum(Xi_now(:,agent_i,:) - Xi_now(:,neighbor_mask_i,:), 2);
+
+                % 各诱导点的平方和：[1 x 1 x M] → squeeze成[M x 1]
+                e_sq_all       = squeeze(sum(e_tilde_all.^2, 1));  % [M x 1]
+                z_sq_all       = squeeze(sum(z_all.^2, 1));        % [M x 1]
+                threshold_all  = coeff_i * z_sq_all;               % [M x 1]
+
+                % 触发mask：[M x 1]
+                trigger_mask = (e_sq_all > threshold_all) | (iter == 1);
+
+                % 批量更新触发的诱导点
+                Xi_last_trigger(:,agent_i,trigger_mask) = Xi_now(:,agent_i,trigger_mask);
+                trigger_count_per_agent(agent_i,trigger_mask) = ...
+                    trigger_count_per_agent(agent_i,trigger_mask) + 1;
             end
 
             if max(abs(Zeta(:)-Zeta_prev(:)))<1e-5, break; end
@@ -304,12 +313,12 @@ for mi=1:numel(AllModes)
         while iter<max_iter
             iter=iter+1; Xi_prev=Xi;
 
-            % 动力学：使用广播快照 Xi_last_trigger
-            % xdot = -Kappa_P * L * xhat
-            for agent_i=1:AgentQuantity
-                L_Xi_hat_i = sum(Xi_last_trigger .* reshape(L(agent_i,:),1,AgentQuantity,1), 2);
-                Xi(:,agent_i,:) = Xi(:,agent_i,:) - t_step*Kappa_P*L_Xi_hat_i;
-            end
+            % 动力学向量化：xdot = -Kappa_P * L * xhat
+            Xi_hat_perm = permute(Xi_last_trigger, [2 1 3]);
+            Xi_hat_2d   = reshape(Xi_hat_perm, AgentQuantity, p_dim*NumInducingPoints);
+            L_Xi_hat_2d = L * Xi_hat_2d;
+            L_Xi_hat    = permute(reshape(L_Xi_hat_2d, AgentQuantity, p_dim, NumInducingPoints), [2 1 3]);
+            Xi = Xi - t_step * Kappa_P * L_Xi_hat;
 
             % AC convergence diagnostic
             % AC should converge to the initial average value, not to zero.
@@ -323,22 +332,25 @@ for mi=1:numel(AllModes)
             ac_ref_hist(iter)     = mean(squeeze(Pi(conv_r,:,conv_m)));
             conv_curve_ac(iter)   = conv_ac_avg_error_curve(iter);
 
-            % ET触发条件（point-wise）
-            % e_i 用广播快照，z_i 用实时状态
+            % ET触发条件（point-wise向量化）
+            % e_i = x̂_i - x_i，z_i = Σ_{j∈N_i}(x_i - x_j)（实时状态）
             for agent_i = 1:AgentQuantity
                 neighbor_mask_i = (L(agent_i,:) < 0);
-                for m = 1:NumInducingPoints
-                    e_tilde_i = Xi_last_trigger(:,agent_i,m) - Xi(:,agent_i,m);
-                    z_i = sum(Xi(:,agent_i,m) - Xi(:,neighbor_mask_i,m), 2);
+                N_i = N_degree(agent_i);
+                coeff_i = sigma_i_ac * a_param * (1 - a_param*N_i) / N_i;
 
-                    N_i = N_degree(agent_i);
-                    coeff_i = sigma_i_ac * a_param * (1 - a_param*N_i) / N_i;
-                    threshold_i = coeff_i * sum(z_i.^2);
-                    if sum(e_tilde_i.^2) > threshold_i || iter == 1
-                        Xi_last_trigger(:,agent_i,m) = Xi(:,agent_i,m);
-                        trigger_count_per_agent(agent_i,m) = trigger_count_per_agent(agent_i,m) + 1;
-                    end
-                end
+                e_tilde_all = Xi_last_trigger(:,agent_i,:) - Xi(:,agent_i,:);
+                z_all = sum(Xi(:,agent_i,:) - Xi(:,neighbor_mask_i,:), 2);
+
+                e_sq_all      = squeeze(sum(e_tilde_all.^2, 1));
+                z_sq_all      = squeeze(sum(z_all.^2, 1));
+                threshold_all = coeff_i * z_sq_all;
+
+                trigger_mask = (e_sq_all > threshold_all) | (iter == 1);
+
+                Xi_last_trigger(:,agent_i,trigger_mask) = Xi(:,agent_i,trigger_mask);
+                trigger_count_per_agent(agent_i,trigger_mask) = ...
+                    trigger_count_per_agent(agent_i,trigger_mask) + 1;
             end
 
             if max(abs(Xi(:)-Xi_prev(:)))<1e-5, break; end

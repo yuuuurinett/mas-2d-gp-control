@@ -170,8 +170,8 @@ for method_idx=1:numel(AllModes)
         fprintf('  [TP-DAC] 收敛步数:%d 通信轮数:%d\n',iter_converge,comm_test);
 
     else
-        %% TP-AC：无 reference signal，纯共识 dXi/dt = -L*Xi
-        % Xi 初始值 = Pi，迭代收敛到所有 agent 的 Pi 的平均
+        %% TP-AC：无reference signal，纯共识 dXi/dt = -L*Xi
+        % Xi初始值=Pi，收敛到所有agent的Pi的平均
         while dac_iter<max_iters
             dac_iter=dac_iter+1; Xi_prev=Xi;
             L_Xi=zeros(size(Xi));
@@ -181,7 +181,10 @@ for method_idx=1:numel(AllModes)
             for agent_idx=1:num_agents
                 Xi(:,agent_idx,:)=Xi(:,agent_idx,:)-dac_step_size*dac_gain*L_Xi(:,agent_idx,:);
             end
-            if max(abs(Xi(:)-Xi_prev(:)))<1e-5, break; end
+            % 用agent间disagreement判断收敛（不用前后差，防止第一步就收敛）
+            Xi_mean = mean(Xi, 2);
+            disagreement = max(abs(Xi - Xi_mean), [], 'all');
+            if disagreement < 1e-5, break; end
         end
         iter_converge=dac_iter;
         comm_test=iter_converge;
@@ -190,14 +193,15 @@ for method_idx=1:numel(AllModes)
     end
 
     % 提取预测
-    % TP-DAC: Xi已在上面赋值为P-Zeta；TP-AC: Xi就是收敛后的共识值
+    % TP-DAC: Xi = P - Zeta，取第一个agent（收敛后所有agent值相同）
+    % TP-AC:  Xi收敛到Pi的全局平均，取第一个agent
     Xi_consensus=Xi;
     for test_idx=1:num_eval
         for dim_idx=1:output_dim
-            xi1=mean(Xi_consensus(2*dim_idx-1,:,test_idx));
-            xi2=mean(Xi_consensus(2*dim_idx,:,test_idx));
+            xi1=Xi_consensus(2*dim_idx-1,1,test_idx);  % 取agent 1
+            xi2=Xi_consensus(2*dim_idx,  1,test_idx);
             if ismember(base_method_name,{'gpoe','poe','bcm','rbcm'})
-                final_mu_pred(test_idx,dim_idx)=xi1/max(xi2,eps);
+                final_mu_pred(test_idx,dim_idx)=xi1/max(abs(xi2),1e-4);
             else
                 final_mu_pred(test_idx,dim_idx)=xi1/num_agents;
             end
