@@ -202,11 +202,10 @@ for mi=1:numel(AllModes)
 
             % 动力学：使用上一次广播快照 Xi_last_trigger
             % Zeta_dot = Kappa_P * L * Xi_hat
-            % Vectorized over all agents and inducing points. The Laplacian
-            % acts only on the agent dimension, not on the information-vector
-            % dimension and not on the inducing-point dimension.
-            L_Xi_hat = laplacian_multiply_agent_dim(Xi_last_trigger, L);
-            Zeta = Zeta + t_step*Kappa_P*L_Xi_hat;
+            for agent_i=1:AgentQuantity
+                L_Xi_hat_i = sum(Xi_last_trigger .* reshape(L(agent_i,:),1,AgentQuantity,1), 2);
+                Zeta(:,agent_i,:) = Zeta(:,agent_i,:) + t_step*Kappa_P*L_Xi_hat_i;
+            end
 
             % 当前实时consensus输出
             Xi_now = Pi - Zeta;
@@ -219,34 +218,22 @@ for mi=1:numel(AllModes)
             dac_ref_hist(iter)     = mean(squeeze(Pi(conv_r,:,conv_m)));
             conv_curve_dac(iter)   = conv_dac_disagreement_curve(iter);
 
-            % ET触发条件（point-wise, vectorized over inducing points）
+            % ET触发条件（point-wise）
             % e_i 用广播快照：e_i = xhat_i - x_i
             % z_i 用实时状态：z_i = sum_{j in N_i}(x_i - x_j)
-            % 注意：这里仍然是 per-agent / per-inducing-point trigger，
-            % 不是把所有点合成一个 global trigger。
             for agent_i = 1:AgentQuantity
                 neighbor_i = (L(agent_i,:) < 0);
-                N_i = N_degree(agent_i);
-                coeff_i = sigma_i * a_param * (1 - a_param*N_i) / N_i;
+                for m = 1:NumInducingPoints
+                    e_tilde_i = Xi_last_trigger(:,agent_i,m) - Xi_now(:,agent_i,m);
+                    z_i = sum(Xi_now(:,agent_i,m) - Xi_now(:,neighbor_i,m), 2);
 
-                % e_norm_sq(m) = ||xhat_i(:,m) - x_i(:,m)||^2
-                E_i = Xi_last_trigger(:,agent_i,:) - Xi_now(:,agent_i,:);
-                e_norm_sq = squeeze(sum(E_i.^2, 1));
-
-                % z_i(:,m) = sum_{j in N_i}(x_i(:,m)-x_j(:,m))
-                %           = N_i*x_i(:,m) - sum_{j in N_i}x_j(:,m)
-                Z_i = N_i*Xi_now(:,agent_i,:) - sum(Xi_now(:,neighbor_i,:), 2);
-                z_norm_sq = squeeze(sum(Z_i.^2, 1));
-
-                trigger_idx = (e_norm_sq(:).' > coeff_i * z_norm_sq(:).');
-                if iter == 1
-                    trigger_idx(:) = true;
-                end
-
-                if any(trigger_idx)
-                    Xi_last_trigger(:,agent_i,trigger_idx) = Xi_now(:,agent_i,trigger_idx);
-                    trigger_count_per_agent(agent_i,trigger_idx) = ...
-                        trigger_count_per_agent(agent_i,trigger_idx) + 1;
+                    N_i = N_degree(agent_i);
+                    coeff_i = sigma_i * a_param * (1 - a_param*N_i) / N_i;
+                    threshold_i = coeff_i * sum(z_i.^2);
+                    if sum(e_tilde_i.^2) > threshold_i || iter == 1
+                        Xi_last_trigger(:,agent_i,m) = Xi_now(:,agent_i,m);
+                        trigger_count_per_agent(agent_i,m) = trigger_count_per_agent(agent_i,m) + 1;
+                    end
                 end
             end
 
@@ -295,9 +282,10 @@ for mi=1:numel(AllModes)
 
             % 动力学：使用广播快照 Xi_last_trigger
             % xdot = -Kappa_P * L * xhat
-            % Vectorized over all agents and inducing points.
-            L_Xi_hat = laplacian_multiply_agent_dim(Xi_last_trigger, L);
-            Xi = Xi - t_step*Kappa_P*L_Xi_hat;
+            for agent_i=1:AgentQuantity
+                L_Xi_hat_i = sum(Xi_last_trigger .* reshape(L(agent_i,:),1,AgentQuantity,1), 2);
+                Xi(:,agent_i,:) = Xi(:,agent_i,:) - t_step*Kappa_P*L_Xi_hat_i;
+            end
 
             % AC convergence diagnostic
             % AC should converge to the initial average value.
@@ -311,30 +299,21 @@ for mi=1:numel(AllModes)
             ac_ref_hist(iter)     = mean(squeeze(Pi(conv_r,:,conv_m)));
             conv_curve_ac(iter)   = conv_ac_avg_error_curve(iter);
 
-            % ET触发条件（point-wise, vectorized over inducing points）
-            % e_i 用广播快照，z_i 用实时状态。
-            % 注意：这里仍然是 per-agent / per-inducing-point trigger，
-            % 不是 global trigger。
+            % ET触发条件（point-wise）
+            % e_i 用广播快照，z_i 用实时状态
             for agent_i = 1:AgentQuantity
                 neighbor_i = (L(agent_i,:) < 0);
-                N_i = N_degree(agent_i);
-                coeff_i = sigma_i_ac * a_param * (1 - a_param*N_i) / N_i;
+                for m = 1:NumInducingPoints
+                    e_tilde_i = Xi_last_trigger(:,agent_i,m) - Xi(:,agent_i,m);
+                    z_i = sum(Xi(:,agent_i,m) - Xi(:,neighbor_i,m), 2);
 
-                E_i = Xi_last_trigger(:,agent_i,:) - Xi(:,agent_i,:);
-                e_norm_sq = squeeze(sum(E_i.^2, 1));
-
-                Z_i = N_i*Xi(:,agent_i,:) - sum(Xi(:,neighbor_i,:), 2);
-                z_norm_sq = squeeze(sum(Z_i.^2, 1));
-
-                trigger_idx = (e_norm_sq(:).' > coeff_i * z_norm_sq(:).');
-                if iter == 1
-                    trigger_idx(:) = true;
-                end
-
-                if any(trigger_idx)
-                    Xi_last_trigger(:,agent_i,trigger_idx) = Xi(:,agent_i,trigger_idx);
-                    trigger_count_per_agent(agent_i,trigger_idx) = ...
-                        trigger_count_per_agent(agent_i,trigger_idx) + 1;
+                    N_i = N_degree(agent_i);
+                    coeff_i = sigma_i_ac * a_param * (1 - a_param*N_i) / N_i;
+                    threshold_i = coeff_i * sum(z_i.^2);
+                    if sum(e_tilde_i.^2) > threshold_i || iter == 1
+                        Xi_last_trigger(:,agent_i,m) = Xi(:,agent_i,m);
+                        trigger_count_per_agent(agent_i,m) = trigger_count_per_agent(agent_i,m) + 1;
+                    end
                 end
             end
 
@@ -449,33 +428,4 @@ for mi=1:numel(AllModes)
         'dac_state_hist', 'dac_ref_hist', ...
         'ac_state_hist', 'ac_ref_hist');
 end
-end
-
-function L_X = laplacian_multiply_agent_dim(X, L)
-%LAPLACIAN_MULTIPLY_AGENT_DIM Apply graph Laplacian along agent dimension.
-%   X has size [p_dim x AgentQuantity x NumPoints].
-%   L has size [AgentQuantity x AgentQuantity].
-%   The result has the same size as X and satisfies
-%       L_X(:,i,m) = sum_j L(i,j) * X(:,j,m).
-%   This is equivalent to computing (L*x)_i for every information-vector
-%   component and every inducing point, but implemented without an explicit
-%   loop over agents or inducing points.
-
-    [p_dim, agent_quantity, num_points] = size(X);
-
-    % Move agent dimension to the first dimension:
-    % [p_dim x N x M] -> [N x p_dim x M]
-    X_agent_first = permute(X, [2, 1, 3]);
-
-    % Flatten all non-agent dimensions so that L multiplies only agents:
-    % [N x p_dim x M] -> [N x (p_dim*M)]
-    X_flat = reshape(X_agent_first, agent_quantity, []);
-
-    % Apply Laplacian along the agent dimension.
-    L_X_flat = L * X_flat;
-
-    % Restore original dimensions:
-    % [N x (p_dim*M)] -> [N x p_dim x M] -> [p_dim x N x M]
-    L_X_agent_first = reshape(L_X_flat, agent_quantity, p_dim, num_points);
-    L_X = permute(L_X_agent_first, [2, 1, 3]);
 end
