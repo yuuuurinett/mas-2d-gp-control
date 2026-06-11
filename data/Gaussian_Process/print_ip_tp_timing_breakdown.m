@@ -17,12 +17,15 @@ function print_ip_tp_timing_breakdown()
 clc;
 
 %% Settings
-datasets = {'KIN40K', 'POL', 'PUMADYN32NM', 'SARCOS'};
+%datasets = {'KIN40K', 'POL', 'PUMADYN32NM', 'SARCOS'};
+datasets = { 'SARCOS'};
 aggs     = {'moe', 'gpoe', 'poe', 'bcm', 'rbcm'};
 
 train_ratio = 0.4;
 tr_tag = round(train_ratio * 100);
-mc_seeds = 1:10;
+mc_seeds = 1;
+%mc_seeds = 1:10;
+
 
 ResultRoot = fullfile('Result', 'Dataset');
 

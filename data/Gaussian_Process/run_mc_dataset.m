@@ -9,9 +9,9 @@ fprintf('======================================================\n');
 
 %%  1. 全局配置区域
 datasets    = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
- %datasets    = {'KIN40K'};
+%datasets    = {'SARCOS'};
 train_ratio = 0.4;
-n_mc        = 10;
+n_mc        = 5;
 
 run_log        = true;
 run_ip         = true;
@@ -45,9 +45,9 @@ methods_names = methods_dict(:,1);
 methods_files = methods_dict(:,2);
 num_methods   = length(methods_names);
 
-% 8 种指标: SMSE, RMSE, NLPD, Train(ms/pt), Test(ms/pt), Comm_Tr, Comm_Te, Iter_Conv
-mean_results = NaN(length(datasets), num_methods, 8);
-std_results  = NaN(length(datasets), num_methods, 8);
+% 8 种指标: SMSE, RMSE, Train(ms/pt), Test(ms/pt), Comm_Tr, Comm_Te, Iter_Conv
+mean_results = NaN(length(datasets), num_methods, 7);
+std_results  = NaN(length(datasets), num_methods, 7);
 tr_tag       = round(train_ratio * 100);
 
 %% 3. 运行 & 统计
@@ -64,7 +64,7 @@ for d = 1:length(datasets)
     end
 
     for mi = 1:num_methods
-        sm=NaN(1,n_mc); rm=NaN(1,n_mc); nl=NaN(1,n_mc);
+        sm=NaN(1,n_mc); rm=NaN(1,n_mc); %nl=NaN(1,n_mc);
         t_tr=NaN(1,n_mc); t_te=NaN(1,n_mc);
         c_tr=NaN(1,n_mc); c_te=NaN(1,n_mc); it=NaN(1,n_mc);
 
@@ -81,7 +81,7 @@ for d = 1:length(datasets)
                     res = load(file_path);
                     sm(mc)   = res.smse;
                     rm(mc)   = res.rmse;
-                    nl(mc)   = res.nlpd;
+                    %nl(mc)   = res.nlpd;
                     t_tr(mc) = res.t_train_per_point;
                     t_te(mc) = res.t_test_per_point;
                     if isfield(res,'comm_train'),   c_tr(mc) = res.comm_train;   else, c_tr(mc) = 0; end
@@ -92,26 +92,38 @@ for d = 1:length(datasets)
                 end
             end
         end
-        mean_results(d,mi,1)=mean(sm,'omitnan');  std_results(d,mi,1)=std(sm,'omitnan');
-        mean_results(d,mi,2)=mean(rm,'omitnan');  std_results(d,mi,2)=std(rm,'omitnan');
-        mean_results(d,mi,3)=mean(nl,'omitnan');  std_results(d,mi,3)=std(nl,'omitnan');
-        mean_results(d,mi,4)=mean(t_tr,'omitnan');std_results(d,mi,4)=std(t_tr,'omitnan');
-        mean_results(d,mi,5)=mean(t_te,'omitnan');std_results(d,mi,5)=std(t_te,'omitnan');
-        mean_results(d,mi,6)=mean(c_tr,'omitnan');std_results(d,mi,6)=0;
-        mean_results(d,mi,7)=mean(c_te,'omitnan');std_results(d,mi,7)=0;
-        mean_results(d,mi,8)=mean(it,'omitnan');  std_results(d,mi,8)=0;
+        mean_results(d,mi,1)=mean(sm,'omitnan');
+        std_results(d,mi,1)=std(sm,'omitnan');
+
+        mean_results(d,mi,2)=mean(rm,'omitnan');
+        std_results(d,mi,2)=std(rm,'omitnan');
+
+        mean_results(d,mi,3)=mean(t_tr,'omitnan');
+        std_results(d,mi,3)=std(t_tr,'omitnan');
+
+        mean_results(d,mi,4)=mean(t_te,'omitnan');
+        std_results(d,mi,4)=std(t_te,'omitnan');
+
+        mean_results(d,mi,5)=mean(c_tr,'omitnan');
+        std_results(d,mi,5)=0;
+
+        mean_results(d,mi,6)=mean(c_te,'omitnan');
+        std_results(d,mi,6)=0;
+
+        mean_results(d,mi,7)=mean(it,'omitnan');
+        std_results(d,mi,7)=0;
     end
 end
 
 %% 4. 打印排版
-metrics_names = {'SMSE','RMSE','NLPD','Train_T(ms/pt)','Test_T(ms/pt)',...
+metrics_names = {'SMSE','RMSE','Train_T(ms/pt)','Test_T(ms/pt)',...
                  'Comm_Train','Comm_Test','Iter_Converge'};
 agg_list     = {'MOE','GPOE','POE','BCM','RBCM'};
 col_prefixes = {'LoG','CEN','IP-DAC','IP-AC','TP-DAC','TP-AC','NBR'};
 sep_wide = repmat('=',1,130);
 sep_thin = repmat('-',1,130);
 
-for met = 1:8
+for met = 1:7
     fprintf('\n%s\n', sep_wide);
     fprintf('  Metric: %s  (Train=%.0f%%  MC=%d)\n', metrics_names{met}, train_ratio*100, n_mc);
     fprintf('%s\n', sep_wide);
@@ -139,14 +151,14 @@ for met = 1:8
                     sv = std_results(d,mi,met);
                     if isnan(mv)
                         fprintf('  %14s', '-');
-                    elseif met >= 6
+                    elseif met >= 5
                         % Comm 和 Iter 列：整数显示，0 显示为 -
                         if mv==0 || isnan(mv)
                             fprintf('  %14s', '-');
                         else
                             fprintf('  %14.0f', mv);
                         end
-                    elseif met==3 || met==4 || met==5
+                    elseif met==3 || met==4 
                         fprintf('  %14s', sprintf('%.2f±%.2f', mv, sv));
                     else
                         fprintf('  %14s', sprintf('%.4f±%.4f', mv, sv));
