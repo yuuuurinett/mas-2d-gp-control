@@ -1,30 +1,9 @@
 function run_inducingpoint_dataset(DatasetName, CurrentMode, train_ratio, seed)
-% RUN_INDUCINGPOINT_DATASET
-% IP-DAC / IP-AC with vectorized point-wise event triggering.
-%
-% Modification for scheme A:
-%   compute_variance controls whether MaskedGP predictive variance is computed
-%   during the IP test stage.
-%
-%   compute_variance = true:
-%       Full prediction. SMSE, RMSE, and NLPD are evaluated.
-%
-%   compute_variance = false:
-%       Mean-only prediction. SMSE and RMSE are evaluated, NLPD is NaN.
-%       This removes the expensive triangular solve Cholesky_L \ K_star.
-%
-% Important:
-%   This switch only affects the IP test-time prediction stage.
-%   It does not change local GP training, inducing-point consensus, ET logic,
-%   communication count, or MaskedGP training.
 
 if nargin < 3, train_ratio = 0.4; end
 if nargin < 4, seed = 1; end
 rng(seed);
 
-% ============================================================
-% Scheme A switch
-% ============================================================
 % true  : compute predictive variance and NLPD
 % false : skip predictive variance; NLPD = NaN; mean-only test time
 compute_variance = false;
@@ -159,7 +138,7 @@ for n = 1:AgentQuantity
     LocalGP_set{n}.delta = 0.01;
 end
 t_ip_local_gp_train = toc(tic_local_gp);
-t_train_gp = t_ip_local_gp_train; %#ok<NASGU> compatibility
+t_train_gp = t_ip_local_gp_train; 
 fprintf('局部GP: %.4fs\n', t_ip_local_gp_train);
 
 idx_ind = randperm(N_train, NumInducingPoints);
@@ -181,8 +160,8 @@ P_gpoe = zeros(p_dim,AgentQuantity,NumInducingPoints);
 P_moe  = zeros(p_dim,AgentQuantity,NumInducingPoints);
 P_bcm  = zeros(p_dim,AgentQuantity,NumInducingPoints);
 P_rbcm = zeros(p_dim,AgentQuantity,NumInducingPoints);
-mu_ind  = zeros(AgentQuantity,y_dim,NumInducingPoints); %#ok<NASGU>
-var_ind = zeros(AgentQuantity,y_dim,NumInducingPoints); %#ok<NASGU>
+mu_ind  = zeros(AgentQuantity,y_dim,NumInducingPoints);
+var_ind = zeros(AgentQuantity,y_dim,NumInducingPoints);
 
 fprintf('[预计算] %d个诱导点...\n', NumInducingPoints);
 tic_inducing_prediction = tic;

@@ -3,7 +3,7 @@ clc; close all;
 
 %% 配置
 CurrentMode  = 'all';   % 'poe'|'gpoe'|'moe'|'bcm'|'rbcm' 或 'all'
-TestType     = 'all';   % 'test'|'inducing'|'cen'|'nbr'|'all'
+TestType     = 'inducing';   % 'test'|'inducing'|'cen'|'nbr'|'all'
 use_formation = true;   % true = 有formation，false = 无formation
 
 % 文件名后缀，方便两次结果共存
@@ -32,15 +32,15 @@ else
 end
 
 %% 1. 运行仿真
-%run_inducing = ismember(lower(TestType), {'inducing','all'});
-%run_test     = ismember(lower(TestType), {'test','all'});
-%run_cen      = ismember(lower(TestType), {'cen','all'});
-%run_nbr      = ismember(lower(TestType), {'nbr','all'});
+run_inducing = ismember(lower(TestType), {'inducing','all'});
+run_test     = ismember(lower(TestType), {'test','all'});
+run_cen      = ismember(lower(TestType), {'cen','all'});
+run_nbr      = ismember(lower(TestType), {'nbr','all'});
 
-run_inducing = false;
-run_test     = false;
-run_cen      = false;
-run_nbr      = false;
+%run_inducing = false;
+%run_test     = false;
+%run_cen      = false;
+%run_nbr      = false;
 
 if run_inducing
     AllModes_ind = [Modes_dac, Modes_ac, Modes_baseline];

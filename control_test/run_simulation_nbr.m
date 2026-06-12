@@ -33,7 +33,7 @@ if ~(all(real(eig(Qz))>0) && all(real(eig(Lambda))<0))
 end
 
 %% 4. Time
-t_start = 0; t_end = 4; t_step = 0.01;
+t_start = 0; t_end = 10; t_step = 0.01;
 t_set = t_start:t_step:t_end;
 T = numel(t_set);
 

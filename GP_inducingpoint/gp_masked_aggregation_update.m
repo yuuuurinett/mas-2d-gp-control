@@ -2,7 +2,7 @@ function [MaskedGP, Zeta_vector, Zeta_last_trigger, trigger_count] = gp_masked_a
     P, Zeta_vector, L, ...
     Kappa_P, AgentQuantity, NumInducingPoints, TimeStep, ...
     InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, method, p_dim, ...
-    Zeta_last_trigger, et_sigma, et_a, neighbor_count)
+    Zeta_last_trigger, neighbor_count)
 
 method    = lower(method);
 M         = NumInducingPoints;
@@ -11,14 +11,15 @@ prior_var = SigmaF^2;
 
 trigger_count = zeros(AgentQuantity, 1);
 
-%% Step 1: DAC 积分（ode45，和原版一致，保证数值稳定）
+%% Step 1: DAC 积分（ode45，邻居项用Zeta_last_trigger，符合Kia 2014公式3）
 if TimeStep > 0
     for InducingPointIdx = 1:M
-        P_InducingPoint    = P(:, :, InducingPointIdx);
-        Zeta_InducingPoint = Zeta_vector(:, :, InducingPointIdx);
+        P_InducingPoint        = P(:, :, InducingPointIdx);
+        Zeta_InducingPoint     = Zeta_vector(:, :, InducingPointIdx);
+        Zeta_hat_InducingPoint = Zeta_last_trigger(:, :, InducingPointIdx);
 
         New_Consensus_Zeta_function = @(~, Zeta_ODE_Intern) Compute_New_Consensus_Derivative( ...
-            Zeta_ODE_Intern, P_InducingPoint, L, Kappa_P, AgentQuantity, p_dim);
+            Zeta_ODE_Intern, P_InducingPoint, Zeta_hat_InducingPoint, L, Kappa_P, AgentQuantity, p_dim);
 
         [~, Zeta_ODE_Output] = ode45(New_Consensus_Zeta_function, ...
             [0, TimeStep], Zeta_InducingPoint(:));
@@ -27,31 +28,30 @@ if TimeStep > 0
             p_dim, AgentQuantity);
     end
 
-    %% Step 2: ET 触发判定（Dimarogonas 2012 公式11）
-    % ET 控制的是"是否需要重建 MaskedGP"
-    % 对每个 agent，把所有诱导点展平成一个大向量判断
-    for agent_idx = 1:AgentQuantity
-        % e_i = Zeta_last_trigger_i - Zeta_i
-        error_i      = Zeta_last_trigger(:, agent_idx, :) - Zeta_vector(:, agent_idx, :);
-        error_i_flat = reshape(error_i, [], 1);
+    %% Step 2: ET触发判定（Kia 2014 CDC，公式17，针对无向连通图）
+    % 触发条件：||e_tilde_i||² > (1/4d^i_out) * Σ_{j∈N_i}|x̂^i - x̂^j|² + (1/4d^i_out) * ε²
+    % e_tilde_i = Zeta_last_trigger^i - Zeta^i（广播快照与当前值之差）
+    % Pi 在 control task 中是时变的，因此使用 Kia 2014 动态 ET
+    epsilon_i = 0.01;  % 兜底常数，防止 Zeno 行为
+    for agent_i = 1:AgentQuantity
+        d_i_out         = neighbor_count(agent_i);
+        neighbor_mask_i = (L(agent_i,:) < 0);
 
-        % z_i = sum_{j∈N_i}(Zeta_i - Zeta_j)
-        neighbor_mask      = reshape(L(agent_idx,:) < 0, 1, AgentQuantity, 1);
-        relative_diff      = sum((Zeta_vector(:,agent_idx,:) - Zeta_vector) .* neighbor_mask, 2);
-        relative_diff_flat = reshape(relative_diff, [], 1);
+        % e_tilde_i：广播快照与实时值之差（展平所有诱导点）
+        e_tilde_i_flat = reshape(...
+            Zeta_last_trigger(:,agent_i,:) - Zeta_vector(:,agent_i,:), [], 1);
 
-        rho_i     = sum(error_i_flat .^ 2);
-        norm_z_sq = sum(relative_diff_flat .^ 2);
+        % 邻居广播值之差（Kia 2014公式17右侧第一项）
+        neighbor_broadcast_diff_sq = sum(...
+            (Zeta_last_trigger(:,agent_i,:) - Zeta_last_trigger(:,neighbor_mask_i,:)).^2, 'all');
 
-        N_i       = neighbor_count(agent_idx);
-        % rho_bar_i 加上下界（防止收敛后持续触发）和上界（防止阈值过大触发太少）
-        rho_bar_i = (et_sigma * et_a * (1 - et_a * N_i) / N_i) * norm_z_sq;
-        rho_bar_i = min(rho_bar_i, 1e-3);  % 上界
-        rho_bar_i = max(rho_bar_i, 1e-8);  % 下界
+        % 触发阈值（公式17）
+        threshold_i = (1/(4*d_i_out)) * neighbor_broadcast_diff_sq + ...
+                      (1/(4*d_i_out)) * epsilon_i^2;
 
-        if rho_i > rho_bar_i
-            Zeta_last_trigger(:, agent_idx, :) = Zeta_vector(:, agent_idx, :);
-            trigger_count(agent_idx) = 1;
+        if sum(e_tilde_i_flat.^2) > threshold_i
+            Zeta_last_trigger(:,agent_i,:) = Zeta_vector(:,agent_i,:);
+            trigger_count(agent_i) = 1;
         end
     end
 end
@@ -112,11 +112,17 @@ end
 
 end
 
-%% 子函数：计算 DAC 动力学导数
+%% 子函数：计算 DAC 动力学导数（Kia 2014 公式3）
+% ẋ^i = -α(x^i - u^i) - β Σ_j a_ij(x̂^i - x̂^j)
+% 本地跟踪项用实时Zeta，邻居交互项用广播快照Zeta_last_trigger
 function dZeta_dt = Compute_New_Consensus_Derivative(...
-    Zeta_vec, P_Ref, L, Kappa, AgentQuantity, p_dim)
+    Zeta_vec, P_Ref, Zeta_hat, L, Kappa, AgentQuantity, p_dim)
 
-Zeta = reshape(Zeta_vec, p_dim, AgentQuantity);
-dZeta_dt = Kappa * (P_Ref - Zeta) * L';
+Zeta     = reshape(Zeta_vec, p_dim, AgentQuantity);
+% 本地跟踪项：用实时Zeta
+local_track = P_Ref - Zeta;
+% 邻居交互项：用广播快照Zeta_hat（x̂^i - x̂^j）
+neighbor_interact = Zeta_hat * L';
+dZeta_dt = Kappa * (local_track - neighbor_interact);
 dZeta_dt = dZeta_dt(:);
 end

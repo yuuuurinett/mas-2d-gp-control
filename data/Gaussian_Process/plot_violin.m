@@ -191,7 +191,6 @@ function draw_core_violin(ax, x_pos, Y, clr, is_inset, current_max)
     plot(ax, [x_pos, x_pos], [min(Y), max(Y)], 'k-', 'LineWidth', 1.5); 
     plot(ax, [x_pos, x_pos], [q1, q3], 'k-', 'LineWidth', lw_box); 
     
-    x_scatter = x_pos + (rand(size(Y)) - 0.5) * 0.15; 
-    scatter(ax, x_scatter, Y, sc_sz, 'k', 'filled', 'MarkerFaceAlpha', 0.5);
+  
     scatter(ax, x_pos, med, dot_sz, 'w', 'filled', 'MarkerEdgeColor', 'k', 'LineWidth', 1.5); 
 end

@@ -1,41 +1,32 @@
 function print_ip_tp_timing_breakdown()
-% PRINT_IP_TP_TIMING_BREAKDOWN
-% Print timing breakdown table for IP-DAC / IP-AC / TP-DAC / TP-AC.
-%
-% The script only reads saved .mat result files. It does not rerun experiments.
-%
-% Table columns:
-%   LocalGP train      IP: t_ip_local_gp_train, TP: t_tp_local_gp_train
-%   Local prediction   IP: t_ip_inducing_prediction, TP: t_tp_test_local_prediction
-%   Consensus          IP: t_ip_consensus, TP: t_tp_consensus
-%   MaskedGP train     IP: t_ip_maskedgp_train, TP: '-'
-%   Total              IP: t_ip_total_train, TP: t_tp_total_test
-%
-% Put this file under Gaussian_Process and run:
-%   print_ip_tp_timing_breakdown
+% PRINT_IP_TP_TIMING_BREAKDOWN_MSPT
+% Reads saved .mat files and prints two timing-breakdown tables:
+%   1) IP-DAC/IP-AC training-side breakdown, unit = ms / training point
+%   2) TP-DAC/TP-AC test-side breakdown, unit = ms / test point
 
 clc;
 
-%% Settings
 %datasets = {'KIN40K', 'POL', 'PUMADYN32NM', 'SARCOS'};
 datasets = { 'SARCOS'};
 aggs     = {'moe', 'gpoe', 'poe', 'bcm', 'rbcm'};
 
 train_ratio = 0.4;
 tr_tag = round(train_ratio * 100);
-mc_seeds = 1;
-%mc_seeds = 1:10;
-
+mc_seeds = 1:10;
 
 ResultRoot = fullfile('Result', 'Dataset');
 
-fprintf('\n====================================================================================================================================\n');
-fprintf('Timing Breakdown for IP-DAC / IP-AC / TP-DAC / TP-AC  (Train=%d%%, MC=%d)\n', tr_tag, numel(mc_seeds));
-fprintf('====================================================================================================================================\n');
-fprintf('%-6s %-13s %-8s %16s %18s %14s %18s %14s\n', ...
-    'Agg', 'Dataset', 'Mode', 'LocalGP train', 'Local prediction', ...
-    'Consensus', 'MaskedGP train', 'Total');
-fprintf('------------------------------------------------------------------------------------------------------------------------------------\n');
+%% ========================================================================
+% Table 1: IP training-side timing, normalized by N_train
+% ========================================================================
+fprintf('\n============================================================================================================================\n');
+fprintf('Training-side timing breakdown for IP-DAC / IP-AC  (Train=%d%%, MC=%d)\n', tr_tag, numel(mc_seeds));
+fprintf('Unit: ms per training point\n');
+fprintf('============================================================================================================================\n');
+fprintf('%-6s %-13s %-8s %16s %20s %14s %18s %14s\n', ...
+    'Agg', 'Dataset', 'Mode', 'LocalGP train', 'Inducing local pred.', ...
+    'Consensus', 'MaskedGP train', 'Total train');
+fprintf('----------------------------------------------------------------------------------------------------------------------------\n');
 
 for ai = 1:numel(aggs)
     agg = aggs{ai};
@@ -44,148 +35,244 @@ for ai = 1:numel(aggs)
         DatasetName = datasets{di};
         ResultFolder = fullfile(ResultRoot, DatasetName);
 
-        % IP-DAC: e.g. poe_tr40_mc1.mat
-        ip_dac_stats = collect_ip_stats(ResultFolder, agg, '', tr_tag, mc_seeds);
-        print_row(agg, DatasetName, 'IP-DAC', ip_dac_stats);
+        ip_dac_stats = collect_ip_stats_mspt(ResultFolder, agg, '', tr_tag, mc_seeds);
+        print_ip_row(agg, DatasetName, 'IP-DAC', ip_dac_stats);
 
-        % IP-AC: e.g. poe_ac_tr40_mc1.mat
-        ip_ac_stats = collect_ip_stats(ResultFolder, agg, '_ac', tr_tag, mc_seeds);
-        print_row(agg, DatasetName, 'IP-AC', ip_ac_stats);
+        ip_ac_stats = collect_ip_stats_mspt(ResultFolder, agg, '_ac', tr_tag, mc_seeds);
+        print_ip_row(agg, DatasetName, 'IP-AC', ip_ac_stats);
 
-        % TP-DAC: try possible naming conventions
-        tp_dac_stats = collect_tp_stats_multi_suffix(ResultFolder, agg, {'_tp', '_testpoint'}, tr_tag, mc_seeds);
-        print_row(agg, DatasetName, 'TP-DAC', tp_dac_stats);
-
-        % TP-AC: try possible naming conventions
-        tp_ac_stats = collect_tp_stats_multi_suffix(ResultFolder, agg, {'_tp_ac', '_ac_tp', '_testpoint_ac', '_ac_testpoint'}, tr_tag, mc_seeds);
-        print_row(agg, DatasetName, 'TP-AC', tp_ac_stats);
-
-        fprintf('------------------------------------------------------------------------------------------------------------------------------------\n');
+        fprintf('----------------------------------------------------------------------------------------------------------------------------\n');
     end
 
-    fprintf('====================================================================================================================================\n');
+    fprintf('============================================================================================================================\n');
 end
 
-fprintf('\nNotes:\n');
-fprintf('  IP-DAC/IP-AC Total = training-side total time.\n');
-fprintf('  TP-DAC/TP-AC Total = test-side total time.\n');
-fprintf('  MaskedGP train applies only to IP methods.\n');
-fprintf('  TP-AC file names are detected using multiple possible suffixes.\n\n');
-
-end
 
 %% ========================================================================
-function stats = collect_ip_stats(ResultFolder, agg, suffix, tr_tag, mc_seeds)
-% suffix:
-%   ''    for IP-DAC file: poe_tr40_mc1.mat
-%   '_ac' for IP-AC  file: poe_ac_tr40_mc1.mat
+% Table 2: TP test-side timing, normalized by N_eval
+% ========================================================================
+fprintf('\n==============================================================================================================\n');
+fprintf('Test-side timing breakdown for TP-DAC / TP-AC  (Train=%d%%, MC=%d)\n', tr_tag, numel(mc_seeds));
+fprintf('Unit: ms per test point\n');
+fprintf('==============================================================================================================\n');
+fprintf('%-6s %-13s %-8s %22s %14s %14s\n', ...
+    'Agg', 'Dataset', 'Mode', 'Test local prediction', 'Consensus', 'Total test');
+fprintf('--------------------------------------------------------------------------------------------------------------\n');
+
+for ai = 1:numel(aggs)
+    agg = aggs{ai};
+
+    for di = 1:numel(datasets)
+        DatasetName = datasets{di};
+        ResultFolder = fullfile(ResultRoot, DatasetName);
+
+        tp_dac_stats = collect_tp_stats_mspt(ResultFolder, agg, '_tp', tr_tag, mc_seeds);
+        print_tp_row(agg, DatasetName, 'TP-DAC', tp_dac_stats);
+
+        tp_ac_stats = collect_tp_stats_mspt_multi_suffix(ResultFolder, agg, {'_ac_tp','_tp_ac'}, tr_tag, mc_seeds);
+        print_tp_row(agg, DatasetName, 'TP-AC', tp_ac_stats);
+
+        fprintf('--------------------------------------------------------------------------------------------------------------\n');
+    end
+
+    fprintf('==============================================================================================================\n');
+end
+
+fprintf('\nNote:\n');
+fprintf('  IP table: all entries are normalized by N_train and represent training-side cost.\n');
+fprintf('  TP table: entries are normalized by N_eval and represent test-side aggregation cost.\n');
+fprintf('  LocalGP training is shared preprocessing and is not TP-specific test-time cost.\n\n');
+
+end
+
+
+function stats = collect_ip_stats_mspt(ResultFolder, agg, suffix, tr_tag, mc_seeds)
 
 local_gp   = [];
 local_pred = [];
 consensus  = [];
-gp_step    = [];
+maskedgp   = [];
 total      = [];
 
 for seed = mc_seeds
     file = fullfile(ResultFolder, sprintf('%s%s_tr%d_mc%d.mat', agg, suffix, tr_tag, seed));
+    if ~exist(file, 'file'), continue; end
 
-    if ~exist(file, 'file')
+    d = load(file);
+    N_train = infer_N_train(d);
+
+    if isnan(N_train) || N_train <= 0
+        warning('Cannot infer N_train for file: %s. Skipping.', file);
         continue;
     end
 
-    d = load(file);
+    scale = 1000 / N_train;   % seconds -> ms/train point
 
-    t_local_gp = getfield_default(d, 't_ip_local_gp_train', NaN);
-    t_local_pred = getfield_default(d, 't_ip_inducing_prediction', NaN);
-    t_consensus = getfield_default(d, 't_ip_consensus', getfield_default(d, 't_consensus', NaN));
-    t_gp_step = getfield_default(d, 't_ip_maskedgp_train', NaN);
-    t_total = getfield_default(d, 't_ip_total_train', ...
-              getfield_default(d, 't_total_train', ...
-              getfield_default(d, 't_train_total', NaN)));
-
-    local_gp(end+1)   = t_local_gp;    %#ok<AGROW>
-    local_pred(end+1) = t_local_pred;  %#ok<AGROW>
-    consensus(end+1)  = t_consensus;   %#ok<AGROW>
-    gp_step(end+1)    = t_gp_step;     %#ok<AGROW>
-    total(end+1)      = t_total;       %#ok<AGROW>
+    local_gp(end+1)   = getfield_default(d, 't_ip_local_gp_train', NaN)      * scale; %#ok<AGROW>
+    local_pred(end+1) = getfield_default(d, 't_ip_inducing_prediction', NaN) * scale; %#ok<AGROW>
+    consensus(end+1)  = getfield_default(d, 't_ip_consensus', ...
+                         getfield_default(d, 't_consensus', NaN))            * scale; %#ok<AGROW>
+    maskedgp(end+1)   = getfield_default(d, 't_ip_maskedgp_train', NaN)      * scale; %#ok<AGROW>
+    total(end+1)      = getfield_default(d, 't_ip_total_train', ...
+                         getfield_default(d, 't_train_total', ...
+                         getfield_default(d, 't_total_train', NaN)))         * scale; %#ok<AGROW>
 end
 
 stats.local_gp   = summarize(local_gp);
 stats.local_pred = summarize(local_pred);
 stats.consensus  = summarize(consensus);
-stats.gp_step    = summarize(gp_step);
+stats.maskedgp   = summarize(maskedgp);
 stats.total      = summarize(total);
-stats.has_gp_step = true;
 
 end
 
-%% ========================================================================
-function stats = collect_tp_stats_multi_suffix(ResultFolder, agg, suffix_list, tr_tag, mc_seeds)
-% Try several file suffix conventions and collect whichever exists.
 
-local_gp   = [];
+function stats = collect_tp_stats_mspt(ResultFolder, agg, suffix, tr_tag, mc_seeds)
+
 local_pred = [];
 consensus  = [];
 total      = [];
 
 for seed = mc_seeds
-    file = '';
+    file = fullfile(ResultFolder, sprintf('%s%s_tr%d_mc%d.mat', agg, suffix, tr_tag, seed));
+    if ~exist(file, 'file'), continue; end
+
+    d = load(file);
+    N_eval = infer_N_eval(d);
+
+    if isnan(N_eval) || N_eval <= 0
+        warning('Cannot infer N_eval for file: %s. Skipping.', file);
+        continue;
+    end
+
+    scale = 1000 / N_eval;   % seconds -> ms/test point
+
+    local_pred(end+1) = getfield_default(d, 't_tp_test_local_prediction', NaN) * scale; %#ok<AGROW>
+    consensus(end+1)  = getfield_default(d, 't_tp_consensus', ...
+                         getfield_default(d, 't_consensus', NaN))              * scale; %#ok<AGROW>
+    total(end+1)      = getfield_default(d, 't_tp_total_test', ...
+                         getfield_default(d, 't_test_total', NaN))             * scale; %#ok<AGROW>
+end
+
+stats.local_pred = summarize(local_pred);
+stats.consensus  = summarize(consensus);
+stats.total      = summarize(total);
+
+end
+
+
+function stats = collect_tp_stats_mspt_multi_suffix(ResultFolder, agg, suffix_list, tr_tag, mc_seeds)
+
+local_pred = [];
+consensus  = [];
+total      = [];
+
+for seed = mc_seeds
+    found = false;
+
     for si = 1:numel(suffix_list)
-        candidate = fullfile(ResultFolder, sprintf('%s%s_tr%d_mc%d.mat', agg, suffix_list{si}, tr_tag, seed));
-        if exist(candidate, 'file')
-            file = candidate;
+        suffix = suffix_list{si};
+        file = fullfile(ResultFolder, sprintf('%s%s_tr%d_mc%d.mat', agg, suffix, tr_tag, seed));
+        if exist(file, 'file')
+            found = true;
             break;
         end
     end
 
-    if isempty(file)
+    if ~found, continue; end
+
+    d = load(file);
+    N_eval = infer_N_eval(d);
+
+    if isnan(N_eval) || N_eval <= 0
+        warning('Cannot infer N_eval for file: %s. Skipping.', file);
         continue;
     end
 
-    d = load(file);
+    scale = 1000 / N_eval;
 
-    t_local_gp = getfield_default(d, 't_tp_local_gp_train', NaN);
-    t_local_pred = getfield_default(d, 't_tp_test_local_prediction', NaN);
-    t_consensus = getfield_default(d, 't_tp_consensus', getfield_default(d, 't_consensus', NaN));
-    t_total = getfield_default(d, 't_tp_total_test', getfield_default(d, 't_test_total', NaN));
-
-    local_gp(end+1)   = t_local_gp;    %#ok<AGROW>
-    local_pred(end+1) = t_local_pred;  %#ok<AGROW>
-    consensus(end+1)  = t_consensus;   %#ok<AGROW>
-    total(end+1)      = t_total;       %#ok<AGROW>
+    local_pred(end+1) = getfield_default(d, 't_tp_test_local_prediction', NaN) * scale; %#ok<AGROW>
+    consensus(end+1)  = getfield_default(d, 't_tp_consensus', ...
+                         getfield_default(d, 't_consensus', NaN))              * scale; %#ok<AGROW>
+    total(end+1)      = getfield_default(d, 't_tp_total_test', ...
+                         getfield_default(d, 't_test_total', NaN))             * scale; %#ok<AGROW>
 end
 
-stats.local_gp   = summarize(local_gp);
 stats.local_pred = summarize(local_pred);
 stats.consensus  = summarize(consensus);
-stats.gp_step    = summarize([]);
 stats.total      = summarize(total);
-stats.has_gp_step = false;
 
 end
 
-%% ========================================================================
-function print_row(agg, DatasetName, mode, stats)
 
-local_gp_str = format_summary(stats.local_gp);
-local_str    = format_summary(stats.local_pred);
-cons_str     = format_summary(stats.consensus);
+function print_ip_row(agg, DatasetName, mode, stats)
 
-if isfield(stats, 'has_gp_step') && stats.has_gp_step
-    gp_str = format_summary(stats.gp_step);
-else
-    gp_str = '-';
-end
-
-total_str = format_summary(stats.total);
-
-fprintf('%-6s %-13s %-8s %16s %18s %14s %18s %14s\n', ...
-    upper(agg), DatasetName, mode, local_gp_str, local_str, ...
-    cons_str, gp_str, total_str);
+fprintf('%-6s %-13s %-8s %16s %20s %14s %18s %14s\n', ...
+    upper(agg), DatasetName, mode, ...
+    format_summary(stats.local_gp), ...
+    format_summary(stats.local_pred), ...
+    format_summary(stats.consensus), ...
+    format_summary(stats.maskedgp), ...
+    format_summary(stats.total));
 
 end
 
-%% ========================================================================
+
+function print_tp_row(agg, DatasetName, mode, stats)
+
+fprintf('%-6s %-13s %-8s %22s %14s %14s\n', ...
+    upper(agg), DatasetName, mode, ...
+    format_summary(stats.local_pred), ...
+    format_summary(stats.consensus), ...
+    format_summary(stats.total));
+
+end
+
+
+function N_train = infer_N_train(d)
+
+N_train = NaN;
+
+if isfield(d, 'N_train')
+    N_train = d.N_train;
+    return;
+end
+
+if isfield(d, 't_train_total') && isfield(d, 't_train_per_point') && d.t_train_per_point > 0
+    N_train = d.t_train_total * 1000 / d.t_train_per_point;
+    return;
+end
+
+if isfield(d, 't_ip_total_train') && isfield(d, 't_train_per_point') && d.t_train_per_point > 0
+    N_train = d.t_ip_total_train * 1000 / d.t_train_per_point;
+    return;
+end
+
+end
+
+
+function N_eval = infer_N_eval(d)
+
+N_eval = NaN;
+
+if isfield(d, 'N_eval')
+    N_eval = d.N_eval;
+    return;
+end
+
+if isfield(d, 't_test_total') && isfield(d, 't_test_per_point') && d.t_test_per_point > 0
+    N_eval = d.t_test_total * 1000 / d.t_test_per_point;
+    return;
+end
+
+if isfield(d, 't_tp_total_test') && isfield(d, 't_test_per_point') && d.t_test_per_point > 0
+    N_eval = d.t_tp_total_test * 1000 / d.t_test_per_point;
+    return;
+end
+
+end
+
+
 function s = summarize(x)
 
 x = x(~isnan(x));
@@ -196,7 +283,7 @@ if isempty(x)
     s.n    = 0;
 else
     s.mean = mean(x);
-    if numel(x) == 1
+    if numel(x) <= 1
         s.std = 0;
     else
         s.std = std(x);
@@ -206,7 +293,7 @@ end
 
 end
 
-%% ========================================================================
+
 function str = format_summary(s)
 
 if s.n == 0 || isnan(s.mean)
@@ -217,7 +304,7 @@ end
 
 end
 
-%% ========================================================================
+
 function value = getfield_default(s, field_name, default_value)
 
 if isfield(s, field_name)

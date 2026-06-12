@@ -33,7 +33,7 @@ if ~(all(real(eig(Qz))>0) && all(real(eig(Lambda))<0))
 end
 
 %% 4. Time
-t_start = 0; t_end = 4; t_step = 0.01;
+t_start = 0; t_end = 10; t_step = 0.01;
 t_set = t_start:t_step:t_end;
 T = numel(t_set);
 
@@ -147,40 +147,67 @@ for t_Nr = 1:T-1
         f_hat_matrix = Phi_Xi;
 
     elseif ismember(lower(CurrentMode), ac_methods)
+        % TP-AC：在当前状态点上构建P矩阵，做AC迭代共识
+        % 和dataset的TP-AC一致：Xi初始值=Pi，纯共识迭代收敛到Pi的平均
         base = strrep(lower(CurrentMode), '_ac', '');
+        p_dim_tp = 2 * y_dim;
+        dac_step_size = 0.01; dac_gain = 10; max_iters_tp = 3000;
+
         for n = 1:AgentQuantity
             x_n = AgentState_matrix(:, n);
-            mu_all  = zeros(y_dim, AgentQuantity);
-            var_all = zeros(y_dim, AgentQuantity);
+
+            % 构建P矩阵（当前状态点）
+            P_tp = zeros(p_dim_tp, AgentQuantity);
             for k = 1:AgentQuantity
                 [mu_k, var_k] = LocalGP_set{k}.predict(x_n);
-                mu_all(:,k)  = mu_k;
-                var_all(:,k) = var_k;
-            end
-            mu_agg = zeros(y_dim, 1);
-            for d = 1:y_dim
-                mu_a  = mu_all(d,:)';
-                var_a = var_all(d,:)';
-                beta  = max(0.5*(log(prior_var)-log(var_a)), eps);
-                switch base
-                    case 'moe'
-                        mu_agg(d) = mean(mu_a);
-                    case 'gpoe'
-                        prec = sum(beta./var_a);
-                        mu_agg(d) = sum(beta.*mu_a./var_a)/max(prec,eps);
-                    case 'poe'
-                        prec = sum(1./var_a);
-                        mu_agg(d) = sum(mu_a./var_a)/max(prec,eps);
-                    case 'bcm'
-                        prec = sum(1./var_a)-(AgentQuantity-1)/prior_var;
-                        mu_agg(d) = sum(mu_a./var_a)/max(prec,eps);
-                    case 'rbcm'
-                        prec = sum(beta./var_a)+(1-sum(beta))/prior_var;
-                        mu_agg(d) = sum(beta.*mu_a./var_a)/max(prec,eps);
+                for d = 1:y_dim
+                    sv   = max(var_k(d), 1e-6);
+                    beta = max(min(0.5*(log(prior_var)-log(sv)), 10), eps);
+                    switch base
+                        case 'moe'
+                            P_tp(2*d-1,k) = AgentQuantity * mu_k(d);
+                            P_tp(2*d,  k) = AgentQuantity * (sv + mu_k(d)^2);
+                        case 'gpoe'
+                            P_tp(2*d-1,k) = AgentQuantity * beta * mu_k(d) / sv;
+                            P_tp(2*d,  k) = AgentQuantity * beta / sv;
+                        case 'poe'
+                            P_tp(2*d-1,k) = AgentQuantity * mu_k(d) / sv;
+                            P_tp(2*d,  k) = AgentQuantity / sv;
+                        case 'bcm'
+                            P_tp(2*d-1,k) = AgentQuantity * mu_k(d) / sv;
+                            P_tp(2*d,  k) = AgentQuantity / sv - (AgentQuantity-1)/prior_var;
+                        case 'rbcm'
+                            P_tp(2*d-1,k) = AgentQuantity * beta * mu_k(d) / sv;
+                            P_tp(2*d,  k) = AgentQuantity * beta / sv + (1-AgentQuantity*beta)/prior_var;
+                    end
                 end
             end
-            mu_agg = max(-30, min(30, mu_agg));
-            f_hat_matrix(:,n) = mu_agg;
+
+            % AC迭代共识：Xi初始值=Pi，收敛到Pi的平均
+            Xi_tp = P_tp; dac_iter_tp = 0;
+            while dac_iter_tp < max_iters_tp
+                dac_iter_tp = dac_iter_tp + 1;
+                Xi_tp_prev = Xi_tp;
+                L_Xi = zeros(size(Xi_tp));
+                for ai = 1:AgentQuantity
+                    L_Xi(:,ai) = sum(Xi_tp .* reshape(L_lap(ai,:),1,AgentQuantity), 2);
+                end
+                Xi_tp = Xi_tp - dac_step_size * dac_gain * L_Xi;
+                Xi_mean = mean(Xi_tp, 2);
+                if max(abs(Xi_tp - Xi_mean), [], 'all') < 1e-5, break; end
+            end
+
+            % 提取agent n的预测
+            for d = 1:y_dim
+                xi1 = Xi_tp(2*d-1, n);
+                xi2 = Xi_tp(2*d,   n);
+                if ismember(base, {'gpoe','poe','bcm','rbcm'})
+                    f_hat_matrix(d,n) = xi1 / max(abs(xi2), 1e-4);
+                else
+                    f_hat_matrix(d,n) = xi1 / AgentQuantity;
+                end
+            end
+            f_hat_matrix(:,n) = max(-30, min(30, f_hat_matrix(:,n)));
         end
 
     elseif strcmpi(CurrentMode,'local')

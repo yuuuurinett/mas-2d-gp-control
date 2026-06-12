@@ -90,18 +90,16 @@ if ismember(lower(CurrentMode), dac_methods)
         InducingPoints_Coordinates, base_method);
     Zeta_vector_inducing = zeros(p_dim, AgentQuantity, NumInducingPoints);
 
-    % ET 参数初始化
-    neighbor_count_per_agent = sum(L_lap < 0, 2);  % [AgentQuantity × 1]
-    max_neighbor_count       = max(neighbor_count_per_agent);
-    et_sigma = 0.2;
-    et_a     = 0.9 / max_neighbor_count;
-    Zeta_last_trigger = zeros(p_dim, AgentQuantity, NumInducingPoints);
+    % ET参数在 gp_masked_aggregation_update 内部定义（Kia 2014公式17）
+    neighbor_count_per_agent = sum(L_lap < 0, 2);
+    % Zeta_last_trigger初始化为P_inducing，避免初始邻居差过大导致触发太少
+    Zeta_last_trigger = P_inducing;
     total_trigger_count = zeros(AgentQuantity, 1);
 
     [MaskedGP, Zeta_vector_inducing, Zeta_last_trigger, ~] = gp_masked_aggregation_update( ...
         P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
         NumInducingPoints, 0, InducingPoints_Coordinates, SigmaF, SigmaL, ...
-        x_dim, base_method, p_dim, Zeta_last_trigger, et_sigma, et_a, neighbor_count_per_agent);
+        x_dim, base_method, p_dim, Zeta_last_trigger, neighbor_count_per_agent);
 elseif ismember(lower(CurrentMode), ac_methods)
     base_method = strrep(lower(CurrentMode), '_ac', '');
     MaskedGP = gp_masked_aggregation_ac( ...
@@ -163,7 +161,7 @@ for t_Nr = 1:T-1
                 P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
                 NumInducingPoints, t_step, InducingPoints_Coordinates, ...
                 SigmaF, SigmaL, x_dim, base_method, p_dim, ...
-                Zeta_last_trigger, et_sigma, et_a, neighbor_count_per_agent);
+                Zeta_last_trigger, neighbor_count_per_agent);
             % 只有任意 agent 触发时才更新 MaskedGP
             if any(step_triggers)
                 MaskedGP = MaskedGP_new;

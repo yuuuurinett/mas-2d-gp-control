@@ -11,7 +11,7 @@ fprintf('======================================================\n');
 datasets    = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
 %datasets    = {'SARCOS'};
 train_ratio = 0.4;
-n_mc        = 5;
+n_mc        = 10;
 
 run_log        = true;
 run_ip         = true;
