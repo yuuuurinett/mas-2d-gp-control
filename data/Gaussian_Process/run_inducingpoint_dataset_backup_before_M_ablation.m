@@ -1,8 +1,7 @@
-function run_inducingpoint_dataset(DatasetName, CurrentMode, train_ratio, seed, NumInducingPoints_override)
+function run_inducingpoint_dataset(DatasetName, CurrentMode, train_ratio, seed)
 
 if nargin < 3, train_ratio = 0.4; end
 if nargin < 4, seed = 1; end
-if nargin < 5, NumInducingPoints_override = []; end
 rng(seed);
 
 % true  : compute predictive variance and NLPD
@@ -110,17 +109,12 @@ Kappa_P = 10;
 t_step = 0.01;
 MaxDataPerAgent = min(floor(N_train/AgentQuantity), 3000);
 
-if ~isempty(NumInducingPoints_override)
-    NumInducingPoints = NumInducingPoints_override;
-else
-    switch upper(DatasetName)
-        case {'SARCOS','POL'}
-            NumInducingPoints = 2500;
-        otherwise
-            NumInducingPoints = 2000;
-    end
+switch upper(DatasetName)
+    case {'SARCOS','POL'}
+        NumInducingPoints = 2500;
+    otherwise
+        NumInducingPoints = 2000;
 end
-fprintf('NumInducingPoints M = %d\n', NumInducingPoints);
 
 MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(AgentQuantity,1);
 L = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
@@ -497,7 +491,7 @@ for mi = 1:numel(AllModes)
     rmse_curve = sqrt(cumsum(err_sq_mean) ./ (1:N_eval)');
     event_count_mean = comm_train;
 
-    save(fullfile(SaveFolder, sprintf('%s_M%d_tr%d_mc%d.mat', current_method, NumInducingPoints, tr_tag, seed)), ...
+    save(fullfile(SaveFolder, sprintf('%s_tr%d_mc%d.mat', current_method, tr_tag, seed)), ...
         'smse', 'rmse', 'nlpd', ...
         't_train_total', 't_test_total', ...
         't_train_per_point', 't_test_per_point', ...
@@ -508,7 +502,7 @@ for mi = 1:numel(AllModes)
         't_ip_test_kernel', 't_ip_test_mean', 't_ip_test_variance', ...
         'comm_train', 'comm_test', 'iter_converge', ...
         'event_count_mean', 'trigger_ratio_train', ...
-        'current_method', 'seed', 'train_ratio', 'NumInducingPoints', 'N_train', 'N_eval', ...
+        'current_method', 'seed', 'train_ratio', ...
         'smse_curve', 'rmse_curve', ...
         'trigger_count_per_agent', 'trigger_per_agent_point', ...
         'conv_curve_dac', 'conv_curve_ac', ...
