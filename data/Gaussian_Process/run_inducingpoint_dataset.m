@@ -115,7 +115,7 @@ if ~isempty(NumInducingPoints_override)
 else
     switch upper(DatasetName)
         case {'SARCOS','POL'}
-            NumInducingPoints = 2500;
+            NumInducingPoints = 1500;
         otherwise
             NumInducingPoints = 2000;
     end

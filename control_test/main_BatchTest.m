@@ -32,15 +32,15 @@ else
 end
 
 %% 1. 运行仿真
-run_inducing = ismember(lower(TestType), {'inducing','all'});
-run_test     = ismember(lower(TestType), {'test','all'});
-run_cen      = ismember(lower(TestType), {'cen','all'});
-run_nbr      = ismember(lower(TestType), {'nbr','all'});
+%run_inducing = ismember(lower(TestType), {'inducing','all'});
+%run_test     = ismember(lower(TestType), {'test','all'});
+%run_cen      = ismember(lower(TestType), {'cen','all'});
+%run_nbr      = ismember(lower(TestType), {'nbr','all'});
 
-%run_inducing = false;
-%run_test     = false;
-%run_cen      = false;
-%run_nbr      = false;
+run_inducing = false;
+run_test     = false;
+run_cen      = false;
+run_nbr      = false;
 
 if run_inducing
     AllModes_ind = [Modes_dac, Modes_ac, Modes_baseline];
@@ -129,14 +129,30 @@ end
 Err_Local = load_err(SaveFolder_Test, sprintf('local_%s', form_tag));
 Err_Exact = load_err(SaveFolder_Test, sprintf('exact_%s', form_tag));
 
-% IP-DAC ET 触发次数
+% IP-DAC ET 通信量
+% Dataset-consistent definition:
+% average number of triggered events per agent per inducing point
+% Comm = mean(total_trigger_count) / NumInducingPoints
 Comm_IP_DAC = nan(numel(Modes_dac), 1);
 for m = 1:numel(Modes_dac)
     fpath = fullfile(SaveFolder_Inducing, sprintf('%s_%s.mat', Modes_dac{m}, form_tag));
     if exist(fpath, 'file')
-        d = load(fpath, 'total_trigger_count');
-        if isfield(d, 'total_trigger_count')
-            Comm_IP_DAC(m) = mean(d.total_trigger_count);
+        d = load(fpath);
+
+        if isfield(d, 'trigger_count_per_agent_point')
+            % Preferred: already saved by the updated simulation script
+            Comm_IP_DAC(m) = d.trigger_count_per_agent_point;
+
+        elseif isfield(d, 'total_trigger_count') && isfield(d, 'NumInducingPoints')
+            % Backward-compatible fallback for older result files
+            Comm_IP_DAC(m) = mean(d.total_trigger_count) / d.NumInducingPoints;
+
+        elseif isfield(d, 'total_trigger_count') && isfield(d, 'P_inducing')
+            % Fallback if NumInducingPoints was not saved, but P_inducing exists
+            Comm_IP_DAC(m) = mean(d.total_trigger_count) / size(d.P_inducing, 3);
+
+        else
+            Comm_IP_DAC(m) = NaN;
         end
     end
 end
@@ -145,11 +161,11 @@ end
 fprintf('\n%s\n', repmat('=',1,90));
 fprintf('  Final Tracking Error ||e(T)||  [%s]\n', form_tag);
 fprintf('  %-10s  %-8s  %-8s  %-8s  %-8s  %-8s  %-8s  %-12s\n', ...
-    'Method','IP-DAC','IP-AC','TP-DAC','TP-AC','CEN','NBR','IP-DAC Comm');
+    'Method','IP-DAC','IP-AC','TP-DAC','TP-AC','CEN','NBR','IP-DAC Comm/pt');
 fprintf('  %s\n', repmat('-',1,86));
 for m=1:numel(Modes_dac)
     if ~isnan(Comm_IP_DAC(m))
-        comm_str = sprintf('%.1f', Comm_IP_DAC(m));
+        comm_str = sprintf('%.2f', Comm_IP_DAC(m));
     else
         comm_str = '-';
     end

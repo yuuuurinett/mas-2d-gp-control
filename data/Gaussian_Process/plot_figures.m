@@ -6,7 +6,7 @@ datasets = {'KIN40K', 'POL', 'PUMADYN32NM', 'SARCOS'};
 metrics  = {'SMSE', 'RMSE'};
 aggs     = {'moe', 'gpoe', 'poe', 'bcm', 'rbcm'};
 train_ratio = 40;
-n_mc = 1; % 根据你实际跑的 Monte Carlo 次数修改
+n_mc = 10; % 根据你实际跑的 Monte Carlo 次数修改
 
 
 dataset_configs = {

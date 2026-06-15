@@ -1,7 +1,7 @@
 clear; clc;
 
 % Inducing-point ablation: M vs Train time and SMSE
-DatasetName = 'SARCOS';
+DatasetName = 'POL';
 CurrentMode = 'poe';
 train_ratio = 0.4;
 

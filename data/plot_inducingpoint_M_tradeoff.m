@@ -1,6 +1,6 @@
 clear; clc; close all;
 
-DatasetName = 'SARCOS';
+DatasetName = 'POL';
 Method = 'poe';
 train_ratio = 0.4;
 tr_tag = round(train_ratio * 100);
@@ -10,7 +10,7 @@ seeds = 1:3;
 
 % This matches the SaveFolder in run_inducingpoint_dataset.m:
 % SaveFolder = fullfile('Result','Dataset',DatasetName);
-ResultFolder = fullfile('Result','Dataset',DatasetName);
+ResultFolder = fullfile('result','Dataset',DatasetName);
 
 SMSE_all   = nan(numel(M_list), numel(seeds));
 TrainT_all = nan(numel(M_list), numel(seeds));
@@ -82,45 +82,29 @@ for mi = 1:numel(M_list)
         SMSE_mean(mi), SMSE_std(mi));
 end
 
-%% Figure 1: M vs training time, log y-axis
-figure;
-errorbar(M_list, TrainT_mean, TrainT_std, '-o', ...
-    'LineWidth', 1.5, 'MarkerSize', 7);
-set(gca, 'YScale', 'log');
-grid on;
-xlabel('Number of inducing points M');
-ylabel('Training time (ms / training point, log scale)');
-title(sprintf('%s / %s: M vs training time', DatasetName, upper(Method)));
 
-%% Figure 2: M vs SMSE
-figure;
-errorbar(M_list, SMSE_mean, SMSE_std, '-o', ...
-    'LineWidth', 1.5, 'MarkerSize', 7);
-grid on;
-xlabel('Number of inducing points M');
-ylabel('SMSE');
-title(sprintf('%s / %s: M vs SMSE', DatasetName, upper(Method)));
+%% ============================================================
+%  Figure: Train time vs SMSE trade-off
+%  This is the most direct trade-off plot.
+%  Each point corresponds to one M.
+%  ============================================================
 
-%% Figure 3: runtime-performance trade-off
-figure;
+figure('Name','Train_time_SMSE_tradeoff','Color','w');
+
 plot(TrainT_mean, SMSE_mean, '-o', ...
-    'LineWidth', 1.5, 'MarkerSize', 7);
+    'LineWidth', 2.0, 'MarkerSize', 8);
+
 grid on;
-xlabel('Training time (ms / training point)');
+xlabel('Train time (ms / training point)');
 ylabel('SMSE');
-title(sprintf('%s / %s: runtime-performance trade-off', DatasetName, upper(Method)));
+title(sprintf('%s / %s: train-time vs SMSE trade-off', ...
+    DatasetName, upper(Method)));
 
 for mi = 1:numel(M_list)
     text(TrainT_mean(mi), SMSE_mean(mi), sprintf('  M=%d', M_list(mi)), ...
         'FontSize', 10);
 end
 
-%% Optional Figure 4: M vs test time
-figure;
-errorbar(M_list, TestT_mean, TestT_std, '-o', ...
-    'LineWidth', 1.5, 'MarkerSize', 7);
-set(gca, 'YScale', 'log');
-grid on;
-xlabel('Number of inducing points M');
-ylabel('Test time (ms / test point, log scale)');
-title(sprintf('%s / %s: M vs test time', DatasetName, upper(Method)));
+exportgraphics(gcf, 'Train_time_SMSE_tradeoff.png', 'Resolution', 300);
+
+

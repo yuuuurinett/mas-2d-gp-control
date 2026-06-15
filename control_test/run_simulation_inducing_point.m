@@ -34,7 +34,7 @@ if ~(all(real(eig(Qz))>0) && all(real(eig(Lambda))<0))
 end
 
 %% 4. Time
-t_start = 0; t_end = 4; t_step = 0.01;
+t_start = 0; t_end = 10; t_step = 0.01;
 t_set = t_start:t_step:t_end;
 T = numel(t_set);
 
@@ -75,7 +75,7 @@ for n = 1:AgentQuantity
 end
 
 %% 7. Inducing Points & Mode Init
-Kappa_P = 10;
+Kappa_P = 1;   % Conservative gain for control-task IP-DAC debugging
 NumInducingPoints = 400;
 InducingPoints_Coordinates = 2*DomainScale*rand(x_dim,NumInducingPoints) - DomainScale;
 L_lap = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
@@ -90,10 +90,17 @@ if ismember(lower(CurrentMode), dac_methods)
         InducingPoints_Coordinates, base_method);
     Zeta_vector_inducing = zeros(p_dim, AgentQuantity, NumInducingPoints);
 
-    % ET参数在 gp_masked_aggregation_update 内部定义（Kia 2014公式17）
-    neighbor_count_per_agent = sum(L_lap < 0, 2);
-    % Zeta_last_trigger初始化为P_inducing，避免初始邻居差过大导致触发太少
+    % ET parameters are handled inside gp_masked_aggregation_update.
+    % NOTE:
+    % Zeta_last_trigger is kept only for interface compatibility.
+    % Mathematically it stores Xi_last_trigger = \hat{\xi}, not \hat{\zeta}.
+    % Since Zeta(0)=0 and Xi(0)=P-Zeta=P, initialize Xi_last_trigger=P_inducing.
+    neighbor_count_per_agent = sum(L_lap < 0, 2);  % degree d_i for unweighted graph
     Zeta_last_trigger = P_inducing;
+
+    % Point-wise ET statistics:
+    % total_trigger_count(i) counts triggered inducing-point events of agent i
+    % over the whole simulation, not full-agent broadcast events.
     total_trigger_count = zeros(AgentQuantity, 1);
 
     [MaskedGP, Zeta_vector_inducing, Zeta_last_trigger, ~] = gp_masked_aggregation_update( ...
@@ -170,6 +177,7 @@ for t_Nr = 1:T-1
         case ac_methods
             for n = 1:AgentQuantity
                 [mu_hat,~] = MaskedGP{n}.predict(x_all_matrix(:,n));
+                mu_hat = max(-30, min(30, mu_hat));
                 f_hat_matrix(:,n) = mu_hat;
             end
         case 'local'
@@ -216,16 +224,28 @@ end
 
 fprintf('Mode: %s  Formation: %d  done, total=%.2fs\n', CurrentMode, use_formation, toc);
 if ismember(lower(CurrentMode), dac_methods)
-    fprintf('ET 平均触发次数: %.1f / %d 步 (%.1f%%)\n', ...
-        mean(total_trigger_count), T-1, mean(total_trigger_count)/(T-1)*100);
+    % total_trigger_count(i) is point-wise: triggered inducing-point events
+    % of agent i over the whole simulation.
+    %
+    % Dataset-style communication metric:
+    % average trigger count per agent per inducing point over the whole run.
+    % This matches the offline dataset code where comm_train =
+    % mean(trigger_count_per_agent_point(:)), not the raw total count.
+    trigger_count_per_agent_point = mean(total_trigger_count) / NumInducingPoints;
+
+    fprintf('ET 平均触发次数: %.2f / agent / inducing point\n', trigger_count_per_agent_point);
 end
 
 %% 10. Save
+if ~exist('trigger_count_per_agent_point','var')
+    trigger_count_per_agent_point = 0;
+end
 if nargin >= 3
     if ~exist(SaveFolderName,'dir'), mkdir(SaveFolderName); end
     save(fullfile(SaveFolderName,[SaveFileName,'.mat']), ...
         't_set', 'TrackingError_vector', 'CurrentMode', 'use_formation', ...
         'f_hat_all_set', 'f_true_all_set', 'vartheta_all_set', ...
-        'total_trigger_count');
+        'total_trigger_count', 'trigger_count_per_agent_point', ...
+        'NumInducingPoints', 'Kappa_P');
 end
 end
