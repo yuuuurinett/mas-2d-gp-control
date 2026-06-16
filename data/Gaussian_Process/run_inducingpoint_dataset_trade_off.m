@@ -1,4 +1,4 @@
-function run_inducingpoint_dataset(DatasetName, CurrentMode, train_ratio, seed, NumInducingPoints_override)
+function run_inducingpoint_dataset_trade_off(DatasetName, CurrentMode, train_ratio, seed, NumInducingPoints_override)
 
 if nargin < 3, train_ratio = 0.4; end
 if nargin < 4, seed = 1; end
@@ -114,10 +114,14 @@ if ~isempty(NumInducingPoints_override)
     NumInducingPoints = NumInducingPoints_override;
 else
     switch upper(DatasetName)
-        case {'SARCOS','POL'}
+        case {'KIN40K'}
             NumInducingPoints = 2500;
-        otherwise
+        case {'POL'}
             NumInducingPoints = 2000;
+        case {'PUMADYN32NM'}
+            NumInducingPoints = 500;
+        otherwise
+            NumInducingPoints = 2500;
     end
 end
 fprintf('NumInducingPoints M = %d\n', NumInducingPoints);

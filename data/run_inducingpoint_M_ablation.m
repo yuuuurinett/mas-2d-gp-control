@@ -1,7 +1,7 @@
 clear; clc;
 
 % Inducing-point ablation: M vs Train time and SMSE
-DatasetName = 'POL';
+DatasetName = 'PUMADYN32NM';
 CurrentMode = 'poe';
 train_ratio = 0.4;
 
@@ -19,7 +19,7 @@ for mi = 1:numel(M_list)
             DatasetName, CurrentMode, M, seed);
         fprintf('=================================================\n');
 
-        run_inducingpoint_dataset(DatasetName, CurrentMode, train_ratio, seed, M);
+        run_inducingpoint_dataset_trade_off(DatasetName, CurrentMode, train_ratio, seed, M);
     end
 end
 
