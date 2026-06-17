@@ -117,7 +117,7 @@ switch upper(DatasetName)
     case {'PUMADYN32NM'}
         NumInducingPoints = 500;
     otherwise
-        NumInducingPoints = 2500;
+        NumInducingPoints = 1500;
 end
 fprintf('NumInducingPoints M = %d\n', NumInducingPoints);
 

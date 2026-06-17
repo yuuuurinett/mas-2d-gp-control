@@ -9,9 +9,8 @@ fprintf('======================================================\n');
 
 %%  1. 全局配置区域
 datasets    = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
-%datasets    = {'SARCOS'};
 train_ratio = 0.4;
-n_mc        = 3;
+n_mc        = 1;
 
 run_log        = true;
 run_ip         = true;
@@ -45,7 +44,6 @@ methods_names = methods_dict(:,1);
 methods_files = methods_dict(:,2);
 num_methods   = length(methods_names);
 
-% 8 种指标: SMSE, RMSE, Train(ms/pt), Test(ms/pt), Comm_Tr, Comm_Te, Iter_Conv
 mean_results = NaN(length(datasets), num_methods, 7);
 std_results  = NaN(length(datasets), num_methods, 7);
 tr_tag       = round(train_ratio * 100);
@@ -64,7 +62,7 @@ for d = 1:length(datasets)
     end
 
     for mi = 1:num_methods
-        sm=NaN(1,n_mc); rm=NaN(1,n_mc); %nl=NaN(1,n_mc);
+        sm=NaN(1,n_mc); rm=NaN(1,n_mc);
         t_tr=NaN(1,n_mc); t_te=NaN(1,n_mc);
         c_tr=NaN(1,n_mc); c_te=NaN(1,n_mc); it=NaN(1,n_mc);
 
@@ -81,7 +79,6 @@ for d = 1:length(datasets)
                     res = load(file_path);
                     sm(mc)   = res.smse;
                     rm(mc)   = res.rmse;
-                    %nl(mc)   = res.nlpd;
                     t_tr(mc) = res.t_train_per_point;
                     t_te(mc) = res.t_test_per_point;
                     if isfield(res,'comm_train'),   c_tr(mc) = res.comm_train;   else, c_tr(mc) = 0; end
@@ -94,28 +91,22 @@ for d = 1:length(datasets)
         end
         mean_results(d,mi,1)=mean(sm,'omitnan');
         std_results(d,mi,1)=std(sm,'omitnan');
-
         mean_results(d,mi,2)=mean(rm,'omitnan');
         std_results(d,mi,2)=std(rm,'omitnan');
-
         mean_results(d,mi,3)=mean(t_tr,'omitnan');
         std_results(d,mi,3)=std(t_tr,'omitnan');
-
         mean_results(d,mi,4)=mean(t_te,'omitnan');
         std_results(d,mi,4)=std(t_te,'omitnan');
-
         mean_results(d,mi,5)=mean(c_tr,'omitnan');
         std_results(d,mi,5)=0;
-
         mean_results(d,mi,6)=mean(c_te,'omitnan');
         std_results(d,mi,6)=0;
-
         mean_results(d,mi,7)=mean(it,'omitnan');
         std_results(d,mi,7)=0;
     end
 end
 
-%% 4. 打印排版
+%% 4. 🌟 升级版排版区域：同时打印控制台并生成完美 Word HTML 大表
 metrics_names = {'SMSE','RMSE','Train_T(ms/pt)','Test_T(ms/pt)',...
                  'Comm_Train','Comm_Test','Iter_Converge'};
 agg_list     = {'MOE','GPOE','POE','BCM','RBCM'};
@@ -123,22 +114,47 @@ col_prefixes = {'LoG','CEN','IP-DAC','IP-AC','TP-DAC','TP-AC','NBR'};
 sep_wide = repmat('=',1,130);
 sep_thin = repmat('-',1,130);
 
+% 打开 HTML 文件流
+html_file = 'All_Metrics_Tables_For_Word.html';
+fid_html = fopen(html_file, 'w', 'n', 'utf-8');
+
+% 写入高级、紧凑、防换行的样式配置
+fprintf(fid_html, '<!DOCTYPE html><html><head><style>\n');
+fprintf(fid_html, 'h3 { font-family: Arial, sans-serif; margin-top: 30px; color: #333; }\n');
+fprintf(fid_html, 'table { border-collapse: collapse; font-family: "Times New Roman", Times, serif; font-size: 10.5pt; text-align: center; margin-bottom: 20px; }\n');
+fprintf(fid_html, 'th, td { border: 1px solid black; padding: 4px 6px; white-space: nowrap; }\n');
+fprintf(fid_html, 'th { background-color: #DDEBF7; font-weight: bold; }\n'); % 经典淡蓝色表头
+fprintf(fid_html, '</style></head><body>\n');
+
 for met = 1:7
+    % --- 控制台标准打印 ---
     fprintf('\n%s\n', sep_wide);
     fprintf('  Metric: %s  (Train=%.0f%%  MC=%d)\n', metrics_names{met}, train_ratio*100, n_mc);
     fprintf('%s\n', sep_wide);
     fprintf('  Agg    Dataset                   LoG             CEN          IP-DAC           IP-AC          TP-DAC           TP-AC             NBR\n');
     fprintf('  %s\n', sep_thin);
 
+    % --- HTML 表头写入 ---
+    fprintf(fid_html, '<h3>Metric: %s &nbsp;(Train=%.0f%%, MC=%d)</h3>\n', metrics_names{met}, train_ratio*100, n_mc);
+    fprintf(fid_html, '<table>\n');
+    fprintf(fid_html, '  <tr><th>聚合</th><th>数据集</th><th>LoG</th><th>CEN</th><th>IP-DAC</th><th>IP-AC</th><th>TP-DAC</th><th>TP-AC</th><th>NBR</th></tr>\n');
+
     for a_idx = 1:length(agg_list)
         agg = agg_list{a_idx};
         for d = 1:length(datasets)
-            if d==1
-                fprintf('  %-4s   %-12s', agg, datasets{d});
-            else
-                fprintf('         %-12s', datasets{d});
-            end
+            % 控制台每行开头处理
+            if d==1, fprintf('  %-4s   %-12s', agg, datasets{d});
+            else,    fprintf('         %-12s', datasets{d}); end
 
+            % HTML 每行开头处理
+            fprintf(fid_html, '  <tr>\n');
+            if d == 1
+                % 🌟 核心：第一行自动纵向合并单元格，完美复刻模板效果
+                fprintf(fid_html, '    <td rowspan="%d" style="vertical-align: middle; font-weight: bold; background-color: #F2F2F2;">%s</td>\n', length(datasets), agg);
+            end
+            fprintf(fid_html, '    <td style="font-weight: bold;">%s</td>\n', datasets{d});
+
+            % 遍历 7 个方法列
             for col = 1:7
                 prefix      = col_prefixes{col};
                 target_name = sprintf('%s-%s', prefix, agg);
@@ -146,34 +162,51 @@ for met = 1:7
 
                 if isempty(mi)
                     fprintf('  %14s', '-');
+                    fprintf(fid_html, '    <td>-</td>\n');
                 else
                     mv = mean_results(d,mi,met);
                     sv = std_results(d,mi,met);
+                    
                     if isnan(mv)
                         fprintf('  %14s', '-');
+                        fprintf(fid_html, '    <td>-</td>\n');
                     elseif met >= 5
-                        % Comm 和 Iter 列：整数显示，0 显示为 -
-                        if mv==0 || isnan(mv)
+                        if mv==0
                             fprintf('  %14s', '-');
+                            fprintf(fid_html, '    <td>-</td>\n');
                         else
                             fprintf('  %14.0f', mv);
+                            fprintf(fid_html, '    <td>%.0f</td>\n', mv);
                         end
                     elseif met==3 || met==4 
-                        fprintf('  %14s', sprintf('%.2f±%.2f', mv, sv));
+                        str_val = sprintf('%.2f±%.2f', mv, sv);
+                        fprintf('  %14s', str_val);
+                        fprintf(fid_html, '    <td>%s</td>\n', str_val); % 🌟 掐掉空格，杜绝换行
                     else
-                        fprintf('  %14s', sprintf('%.4f±%.4f', mv, sv));
+                        str_val = sprintf('%.4f±%.4f', mv, sv);
+                        fprintf('  %14s', str_val);
+                        fprintf(fid_html, '    <td>%s</td>\n', str_val); % 🌟 掐掉空格，杜绝换行
                     end
                 end
             end
             fprintf('\n');
+            fprintf(fid_html, '  </tr>\n');
         end
         fprintf('  %s\n', sep_thin);
     end
+    fprintf(fid_html, '</table>\n');
 end
 
 fprintf('\n%s\n', sep_wide);
 fprintf('  任务结束时间: %s\n', datestr(now));
 fprintf('%s\n', sep_wide);
 
+fprintf(fid_html, '</body></html>\n');
+fclose(fid_html);
+
 save(fullfile('Result','Dataset','All_Methods_Summary.mat'), 'mean_results', 'std_results');
 diary off;
+
+fprintf('\n📊 完美 Word 表格已同步生成！\n');
+fprintf('请在当前文件夹双击打开【All_Metrics_Tables_For_Word.html】\n');
+fprintf('然后：Ctrl+A (全选) -> Ctrl+C (复制) -> 直接粘贴进你的 Word 文档！\n\n');
