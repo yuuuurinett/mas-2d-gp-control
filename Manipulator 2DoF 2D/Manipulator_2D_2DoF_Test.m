@@ -2,7 +2,7 @@
 clc; clear all; close all;
 rng(0);
 %%
-EventTriggerType = 'exact'; 
+EventTriggerType = 'distributed'; 
 % 'distributed', 'centralized', 'time', 'offline', 'exact'
 %% Set System Dimension
 SystemOrder = 2;
@@ -277,6 +277,7 @@ for t_Nr = 1:numel(t_set)-1
 	end
 	%% Calculate Control Input
 	u_cell = Manipulator_2D_2DoF_get_u_cell(x_all_cell,phi_cell,0 * f_hat_matrix,L1,L2,m1,m2);
+   % u_cell = Manipulator_2D_2DoF_get_u_cell(x_all_cell,phi_cell,f_hat_matrix,L1,L2,m1,m2);
 	u_all = ET_MAS_GP_Leader_cell2vector(u_cell,q_dim);
 	%% Simulation
 	[~,x_all_temp] = ode45( ...
@@ -289,8 +290,16 @@ for t_Nr = 1:numel(t_set)-1
 	%% Print Time
 	fprintf('t = %6.4f\n',t);
 end
-save(['Result\Event Trigger for MAS using GP with Leader\Manipulator 2DoF 2D\Once Comparison\', ...
-	EventTriggerType,'.mat']);
+%save(['Result\Event Trigger for MAS using GP with Leader\Manipulator 2DoF 2D\Once Comparison\', ...
+	%EventTriggerType,'.mat']);
+%% === [终极修复] 自动创建文件夹并安全保存 ===
+save_dir = 'Result\Event Trigger for MAS using GP with Leader\Manipulator 2DoF 2D\Once Comparison\';
+if ~exist(save_dir, 'dir')
+    mkdir(save_dir);
+end
+
+% 保存运行结果
+save([save_dir, EventTriggerType, '.mat']);
 %% Show Agent State Trajectory
 Manipulator_2D_2DoF_ShowAgentTrajectory( ...
 	t_set,xl_set,s_all_set,x_all_set, ...

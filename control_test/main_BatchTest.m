@@ -32,15 +32,15 @@ else
 end
 
 %% 1. 运行仿真
-%run_inducing = ismember(lower(TestType), {'inducing','all'});
-%run_test     = ismember(lower(TestType), {'test','all'});
-%run_cen      = ismember(lower(TestType), {'cen','all'});
-%run_nbr      = ismember(lower(TestType), {'nbr','all'});
+run_inducing = ismember(lower(TestType), {'inducing','all'});
+run_test     = ismember(lower(TestType), {'test','all'});
+run_cen      = ismember(lower(TestType), {'cen','all'});
+run_nbr      = ismember(lower(TestType), {'nbr','all'});
 
-run_inducing = false;
-run_test     = false;
-run_cen      = false;
-run_nbr      = false;
+%run_inducing = false;
+%run_test     = false;
+%run_cen      = false;
+%run_nbr      = false;
 
 if run_inducing
     AllModes_ind = [Modes_dac, Modes_ac, Modes_baseline];
