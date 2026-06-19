@@ -100,45 +100,19 @@ end
 %% Step 3: Reconstruct MaskedGP from aggregated xi information
 Xi_all = Xi_now;
 
+num1 = squeeze(Xi_all(1, :, :));
+aux1 = squeeze(Xi_all(2, :, :));
+num2 = squeeze(Xi_all(3, :, :));
+aux2 = squeeze(Xi_all(4, :, :));
+
 switch method
-    case {'poe', 'gpoe', 'moe'}
-        num1 = squeeze(Xi_all(1, :, :));
-        den1 = squeeze(Xi_all(2, :, :));
-        num2 = squeeze(Xi_all(3, :, :));
-        den2 = squeeze(Xi_all(4, :, :));
-        phi1 = safe_divide(num1, den1);
-        phi2 = safe_divide(num2, den2);
+    case {'poe','gpoe','bcm','rbcm'}
+        phi1 = safe_divide(num1, aux1);
+        phi2 = safe_divide(num2, aux2);
 
-    case 'bcm'
-        num1 = squeeze(Xi_all(1, :, :));
-        num2 = squeeze(Xi_all(2, :, :));
-        den1 = squeeze(Xi_all(3, :, :));
-        den2 = squeeze(Xi_all(4, :, :));
-        prior_correction = (1 - AgentQuantity) / prior_var;
-        den1_fused = den1 + prior_correction;
-        den2_fused = den2 + prior_correction;
-        phi1 = zeros(size(num1));
-        phi2 = zeros(size(num2));
-        mask1 = abs(den1_fused) > 1e-8;
-        mask2 = abs(den2_fused) > 1e-8;
-        phi1(mask1) = num1(mask1) ./ den1_fused(mask1);
-        phi2(mask2) = num2(mask2) ./ den2_fused(mask2);
-
-    case 'rbcm'
-        num1  = squeeze(Xi_all(1, :, :));
-        den1  = squeeze(Xi_all(2, :, :));
-        beta1 = squeeze(Xi_all(3, :, :));
-        num2  = squeeze(Xi_all(4, :, :));
-        den2  = squeeze(Xi_all(5, :, :));
-        beta2 = squeeze(Xi_all(6, :, :));
-        den1_fused = den1 + (1 - beta1) / prior_var;
-        den2_fused = den2 + (1 - beta2) / prior_var;
-        phi1 = zeros(size(num1));
-        phi2 = zeros(size(num2));
-        mask1 = abs(den1_fused) > 1e-8;
-        mask2 = abs(den2_fused) > 1e-8;
-        phi1(mask1) = num1(mask1) ./ den1_fused(mask1);
-        phi2(mask2) = num2(mask2) ./ den2_fused(mask2);
+    case 'moe'
+        phi1 = num1 / AgentQuantity;
+        phi2 = num2 / AgentQuantity;
 
     otherwise
         error('Unknown aggregation method: %s', method);

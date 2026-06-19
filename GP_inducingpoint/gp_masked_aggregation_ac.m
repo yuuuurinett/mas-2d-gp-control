@@ -1,4 +1,4 @@
-function MaskedGP = gp_masked_aggregation_ac( ...
+function[MaskedGP, ac_consensus_trigger_count] = gp_masked_aggregation_ac( ...
     LocalGP_set, InducingPoints_Coordinates, SigmaF, SigmaL, ...
     x_dim, AgentQuantity, NumInducingPoints, method)
 %% gp_masked_aggregation_ac
@@ -57,7 +57,7 @@ end
 Kappa_P = 10; t_step = 0.01; max_iter = 3000;
 Xi              = Pi;   % 实时状态 x_i(t)，初始值 = Pi
 Xi_last_trigger = Pi;   % 广播快照 x̂_i(t)，初始值 = Pi
-
+ac_consensus_trigger_count = zeros(AgentQuantity, M);
 for iter = 1:max_iter
     Xi_prev = Xi;
 
@@ -87,11 +87,13 @@ for iter = 1:max_iter
 
         trigger_mask = (e_sq_all > threshold_all) | (iter == 1);
         Xi_last_trigger(:,agent_i,trigger_mask) = Xi(:,agent_i,trigger_mask);
+        ac_consensus_trigger_count(agent_i, trigger_mask) = ...
+        ac_consensus_trigger_count(agent_i, trigger_mask) + 1;
     end
 
     if max(abs(Xi(:) - Xi_prev(:))) < 1e-5, break; end
 end
-fprintf('[IP-AC control] 收敛步数:%d\n', iter);
+% fprintf('[IP-AC control] 收敛步数:%d\n', iter);  % suppress batch output
 
 %% 4. 提取phi并重建MaskedGP
 MaskedGP = cell(AgentQuantity, 1);

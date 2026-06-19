@@ -1,61 +1,51 @@
 function P = recompute_P_single_agent(P, AgentNr, LocalGP_set, ...
     NumInducingPoints, InducingPoints_Coordinates, AgentQuantity, method)
 % RECOMPUTE_P_SINGLE_AGENT
-%   After agent AgentNr adds a new data point to its LocalGP, recompute
-%   P(:, AgentNr, :) so that the DAC/AC state reflects the updated
-%   posterior.  All other agents' columns are left untouched.
-%
-%   P      : p_dim x AgentQuantity x M  (modified in-place for AgentNr)
-%   method : 'poe' | 'gpoe' | 'moe' | 'bcm' | 'rbcm'
+% Recompute only P(:,AgentNr,:) after an online LocalGP update.
+% Encoding is consistent with gp_masked_aggregation_ac.m:
+%   p_dim = 4 for all methods: [num1; den_or_aux1; num2; den_or_aux2].
 
-method    = lower(method);
-M         = NumInducingPoints;
+method = lower(method);
+M = NumInducingPoints;
 prior_var = LocalGP_set{AgentNr}.SigmaF^2;
+y_dim = 2;
 
 for m = 1:M
     x_m = InducingPoints_Coordinates(:, m);
     [mu_n, var_n] = LocalGP_set{AgentNr}.predict(x_m);
 
-    mu1 = mu_n(1);  var1 = var_n(1);
-    mu2 = mu_n(2);  var2 = var_n(2);
+    for d = 1:y_dim
+        mu = mu_n(d);
+        vs = max(var_n(d), 1e-8);
+        beta = 0.5 * (log(prior_var) - log(vs));
+        beta = max(min(beta, 10), eps);
 
-    switch method
-        case 'poe'
-            P(1, AgentNr, m) = AgentQuantity * mu1 / var1;
-            P(2, AgentNr, m) = AgentQuantity / var1;
-            P(3, AgentNr, m) = AgentQuantity * mu2 / var2;
-            P(4, AgentNr, m) = AgentQuantity / var2;
+        switch method
+            case 'poe'
+                P(2*d-1, AgentNr, m) = AgentQuantity * mu / vs;
+                P(2*d,   AgentNr, m) = AgentQuantity / vs;
 
-        case 'gpoe'
-            beta1 = max(eps, 0.5*(log(prior_var) - log(var1)));
-            beta2 = max(eps, 0.5*(log(prior_var) - log(var2)));
-            P(1, AgentNr, m) = AgentQuantity * beta1 * mu1 / var1;
-            P(2, AgentNr, m) = AgentQuantity * beta1 / var1;
-            P(3, AgentNr, m) = AgentQuantity * beta2 * mu2 / var2;
-            P(4, AgentNr, m) = AgentQuantity * beta2 / var2;
+            case 'gpoe'
+                P(2*d-1, AgentNr, m) = AgentQuantity * beta * mu / vs;
+                P(2*d,   AgentNr, m) = AgentQuantity * beta / vs;
 
-        case 'moe'
-            omega_n = 1.0 / AgentQuantity;
-            P(1, AgentNr, m) = AgentQuantity * omega_n * mu1;
-            P(2, AgentNr, m) = AgentQuantity * omega_n;
-            P(3, AgentNr, m) = AgentQuantity * omega_n * mu2;
-            P(4, AgentNr, m) = AgentQuantity * omega_n;
+            case 'moe'
+                P(2*d-1, AgentNr, m) = AgentQuantity * mu;
+                P(2*d,   AgentNr, m) = AgentQuantity * (vs + mu^2);
 
-        case 'bcm'
-            P(1, AgentNr, m) = AgentQuantity * mu1 / var1;
-            P(2, AgentNr, m) = AgentQuantity * mu2 / var2;
-            P(3, AgentNr, m) = AgentQuantity / var1;
-            P(4, AgentNr, m) = AgentQuantity / var2;
+            case 'bcm'
+                P(2*d-1, AgentNr, m) = AgentQuantity * mu / vs;
+                P(2*d,   AgentNr, m) = AgentQuantity / vs - ...
+                    (AgentQuantity - 1) / prior_var;
 
-        case 'rbcm'
-            beta1 = max(eps, 0.5*(log(prior_var) - log(var1)));
-            beta2 = max(eps, 0.5*(log(prior_var) - log(var2)));
-            P(1, AgentNr, m) = AgentQuantity * beta1 * mu1 / var1;
-            P(2, AgentNr, m) = AgentQuantity * beta1 / var1;
-            P(3, AgentNr, m) = AgentQuantity * beta1;
-            P(4, AgentNr, m) = AgentQuantity * beta2 * mu2 / var2;
-            P(5, AgentNr, m) = AgentQuantity * beta2 / var2;
-            P(6, AgentNr, m) = AgentQuantity * beta2;
+            case 'rbcm'
+                P(2*d-1, AgentNr, m) = AgentQuantity * beta * mu / vs;
+                P(2*d,   AgentNr, m) = AgentQuantity * beta / vs + ...
+                    (1 - AgentQuantity * beta) / prior_var;
+
+            otherwise
+                error('Unknown aggregation method: %s', method);
+        end
     end
 end
 end
