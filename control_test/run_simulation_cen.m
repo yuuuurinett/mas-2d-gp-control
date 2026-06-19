@@ -14,12 +14,15 @@ B = MultiAgentSystem.Agent_Leader_Topology.ConnectionMatrix(:,1);
 %% 3. Controller Parameters
 c = 10;
 lambda_set = [1; 1];
+Fl = 0.25;
 lambda_n = lambda_set(end);
 lambda_vector = lambda_set(1:SystemOrder-1);
 Lambda = [zeros(SystemOrder-2,1), eye(SystemOrder-2);
           -lambda_set(1)/lambda_n, -lambda_set(2:end-1)/lambda_n];
 Qes = eye(SystemOrder-1);
 Pes = care(Lambda, [], Qes);
+Pe  = kron(Pes, eye(AgentQuantity));
+Qe  = kron(Qes, eye(AgentQuantity));
 q   = (L + diag(B)) \ ones(AgentQuantity,1);
 Pr  = diag(1./q);
 Qr  = Pr*(L+diag(B)) + (L+diag(B))'*Pr;
@@ -27,10 +30,20 @@ t_vec = [zeros(SystemOrder-2,1); 1/lambda_n];
 Phi = Pr*kron(lambda_vector'*t_vec, eye(AgentQuantity));
 Psi = Pr*kron(lambda_vector'*Lambda, eye(AgentQuantity)) + ...
       kron(t_vec'*Pes, eye(AgentQuantity));
-Qz  = [c*lambda_n*Qr-2*Phi, -Psi; -Psi', kron(Qes,eye(AgentQuantity))];
-if ~(all(real(eig(Qz))>0) && all(real(eig(Lambda))<0))
+Pz  = blkdiag(Pr, Pe);
+eig_Pz = eig(Pz);
+max_eig_Pz = max(eig_Pz);
+min_eig_Pz = min(eig_Pz);
+Qz  = [c*lambda_n*Qr-2*Phi, -Psi; -Psi', Qe];
+eig_Qz = eig(Qz);
+min_eig_Qz = min(eig_Qz);
+if ~(all(real(eig_Qz)>0) && all(real(eig(Lambda))<0))
     error('Controller is not stable!');
 end
+
+xi = 2 * lambda_n / min_eig_Qz * norm(Pr * (L + diag(B)));
+chi = sqrt((1 + norm([t_vec, Lambda])^2) * max_eig_Pz / min_eig_Pz) * ...
+      norm(inv(L + diag(B)));
 
 %% 4. Time
 t_start = 0; t_end = 10; t_step = 0.01;
@@ -53,11 +66,11 @@ end
 
 %% 6. Local GPs
 SigmaF = 1; SigmaL = 0.5*ones(x_dim,1);
-GP_tau = 1e-8; GP_delta = 0.01; y_dim = q_dim;
+GP_tau = 1e-8; GP_delta = 0.1; y_dim = q_dim;
 DomainScale = 1.5;
-MaxDataQuantity_set     = 400*ones(AgentQuantity,1);
-OfflineDataQuantity_set = MaxDataQuantity_set;
-SigmaN_set = 0.05*ones(AgentQuantity,1);
+MaxDataQuantity_set     = 600*ones(AgentQuantity,1);
+OfflineDataQuantity_set = 200*ones(AgentQuantity,1);
+SigmaN_set = 0.01*ones(AgentQuantity,1);
 prior_var = SigmaF^2;
 
 LocalGP_set = cell(AgentQuantity,1);
@@ -72,7 +85,48 @@ for n = 1:AgentQuantity
     LocalGP_set{n}.delta = GP_delta;
 end
 
-%% 7. Initial State
+%% 7. Online Learning ET Setup
+Bidirection_NeighbourSet = cell(AgentQuantity, 1);
+Sigma_update_aggregation_set = nan(AgentQuantity, 1);
+
+for AgentNr = 1:AgentQuantity
+    AgentNeighbourSet = MultiAgentSystem.Agent_Topology.NeighbourSet{AgentNr};
+
+    for NeighbourNr = numel(AgentNeighbourSet):-1:1
+        NeighbourAgentNr = AgentNeighbourSet(NeighbourNr);
+        if isempty(find(MultiAgentSystem.Agent_Topology.NeighbourSet{NeighbourAgentNr} == AgentNr, 1))
+            AgentNeighbourSet(NeighbourNr) = [];
+        end
+    end
+
+    Bidirection_NeighbourSet{AgentNr} = AgentNeighbourSet;
+
+    Sigma_update_set = nan(numel(AgentNeighbourSet)+1, 1);
+    Sigma_update_set(1) = LocalGP_set{AgentNr}.SigmaN;
+
+    for k = 1:numel(AgentNeighbourSet)
+        NeighbourAgentNr = AgentNeighbourSet(k);
+        Sigma_update_set(k+1) = LocalGP_set{NeighbourAgentNr}.SigmaF;
+    end
+
+    Sigma_update_aggregation_set(AgentNr) = ...
+        sqrt(1 / (sum(Sigma_update_set.^(-2)) / numel(Sigma_update_set)));
+end
+
+beta = 0;
+gamma = 0.0005;
+for LocalGP_Nr = 1:AgentQuantity
+    [~,~,~,beta_i,~,~] = LocalGP_set{LocalGP_Nr}.predict(zeros(x_dim,1));
+    beta = max(beta, beta_i);
+end
+
+eta_underline_set = sqrt(beta) * Sigma_update_aggregation_set + gamma;
+
+vartheta_bar = xi * chi * norm( ...
+    (eye(AgentQuantity) - diag(B)) * ones(AgentQuantity,1) * Fl ...
+    + eta_underline_set);
+
+%% 8. Initial State
 rng(42);  % 固定初始状态seed，确保所有方法一致
     x_all = rand(x_dim*AgentQuantity, 1);
 x_all_set = nan(x_dim*AgentQuantity, T);
@@ -85,6 +139,9 @@ f_true_matrix = zeros(y_dim, AgentQuantity);
 TrackingError_vector = zeros(1, T);
 f_hat_all_set  = nan(y_dim, AgentQuantity, T);
 f_true_all_set = nan(y_dim, AgentQuantity, T);
+
+online_trigger_set = zeros(AgentQuantity, T);
+online_trigger_count = zeros(AgentQuantity, 1);
 
 %% 8. Control Loop
 opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);
@@ -105,7 +162,7 @@ for t_Nr = 1:T-1
 
     TrackingError_vector(t_Nr) = norm(vartheta_all);
 
-    [phi_cell, ~, ~] = Manipulator_2D_2DoF_ConsensusLaw( ...
+    [phi_cell, r_matrix, e_cell] = Manipulator_2D_2DoF_ConsensusLaw( ...
         vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
 
     for n = 1:AgentQuantity
@@ -159,7 +216,16 @@ for t_Nr = 1:T-1
     vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
         kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
 
-    fprintf('t = %6.4f\n', t);
+    %% Online Learning ET: update local GP data for next step
+    [LocalGP_set, online_trigger_set, online_trigger_count] = ...
+        apply_online_learning_et( ...
+        LocalGP_set, online_trigger_set, online_trigger_count, ...
+        t_Nr, x_all_matrix, r_matrix, e_cell, ...
+        AgentQuantity, y_dim, beta, gamma, ...
+        Bidirection_NeighbourSet, eta_underline_set, ...
+        MultiAgentSystem, Fl, xi, chi, vartheta_bar);
+
+    % fprintf('t = %6.4f\n', t);
 end
 TrackingError_vector(end) = norm(vartheta_all_set(:,end));
 
@@ -169,13 +235,96 @@ for n = 1:AgentQuantity
     f_hat_all_set(:,n,end)  = f_hat_matrix(:,n);
 end
 
-fprintf('Mode: CEN-%s  Formation: %d  done, total=%.2fs\n', CurrentMode, use_formation, toc);
-
+elapsed_time = toc;
+fprintf('==================================================');
+fprintf('Mode: %s', CurrentMode);
+fprintf('Formation: %d', use_formation);
+fprintf('Total simulation time: %.2f s', elapsed_time);
+fprintf('Final tracking error: %.6f', TrackingError_vector(end));
+fprintf('Online learning ET:');
+fprintf('  Total triggers: %d', sum(online_trigger_count));
+fprintf('  Average triggers: %.2f / agent', mean(online_trigger_count));
+fprintf('==================================================');
 %% 9. Save
 if nargin >= 3
     if ~exist(SaveFolderName,'dir'), mkdir(SaveFolderName); end
     save(fullfile(SaveFolderName,[SaveFileName,'.mat']), ...
         't_set','TrackingError_vector','CurrentMode','use_formation',...
-        'f_hat_all_set','f_true_all_set','vartheta_all_set');
+        'f_hat_all_set','f_true_all_set','vartheta_all_set', ...
+        'online_trigger_set','online_trigger_count','eta_underline_set', ...
+        'vartheta_bar','elapsed_time');
 end
+end
+
+function [LocalGP_set, online_trigger_set, online_trigger_count] = ...
+    apply_online_learning_et( ...
+    LocalGP_set, online_trigger_set, online_trigger_count, ...
+    t_Nr, x_all_matrix, r_matrix, e_cell, ...
+    AgentQuantity, y_dim, beta, gamma, ...
+    Bidirection_NeighbourSet, eta_underline_set, ...
+    MultiAgentSystem, Fl, xi, chi, vartheta_bar)
+
+mu_cell = cell(AgentQuantity, AgentQuantity);
+var_matrix = nan(AgentQuantity, AgentQuantity);
+eta_aggregated_vector = nan(AgentQuantity, 1);
+
+% Compute current aggregated eta for each controlled agent.
+% Formation convention:
+%   agent i needs f(x_i), therefore all GP models are queried at x_i.
+for AgentNr = 1:AgentQuantity
+
+    x_i = x_all_matrix(:, AgentNr);
+
+    [mu_cell{AgentNr,AgentNr}, var_matrix(AgentNr,AgentNr), ~] = ...
+        Manipulator_2D_2DoF_LocalPrediction( ...
+        x_i, AgentNr, LocalGP_set, beta, gamma, y_dim);
+
+    AgentBidirection_NeighbourSet = Bidirection_NeighbourSet{AgentNr};
+
+    for k = 1:numel(AgentBidirection_NeighbourSet)
+        NeighbourAgentNr = AgentBidirection_NeighbourSet(k);
+
+        % Use neighbour's GP model, but evaluate at agent i's state x_i.
+        [mu_cell{AgentNr,NeighbourAgentNr}, ...
+         var_matrix(AgentNr,NeighbourAgentNr), ~] = ...
+            Manipulator_2D_2DoF_LocalPrediction( ...
+            x_i, NeighbourAgentNr, LocalGP_set, beta, gamma, y_dim);
+    end
+
+    [~, eta_aggregated_i] = ...
+        ET_MAS_GP_Leader_GPAggregation_SingleAgent( ...
+        AgentNr, AgentBidirection_NeighbourSet, ...
+        var_matrix(AgentNr,:), mu_cell(AgentNr,:), beta, gamma);
+
+    eta_aggregated_vector(AgentNr) = eta_aggregated_i;
+end
+
+% Online data-trigger decision.
+for AgentNr = 1:AgentQuantity
+    online_trigger_set(AgentNr, t_Nr) = ...
+        Manipulator_2D_2DoF_DistributedET( ...
+        AgentNr, r_matrix, e_cell, ...
+        eta_underline_set, eta_aggregated_vector, ...
+        MultiAgentSystem, Fl, xi, chi, vartheta_bar);
+end
+
+% Add online data to triggered local GPs.
+for AgentNr = 1:AgentQuantity
+    if online_trigger_set(AgentNr, t_Nr) == 1
+
+        x_i = x_all_matrix(:, AgentNr);
+
+        y_i = Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
+              LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
+
+        if LocalGP_set{AgentNr}.DataQuantity >= LocalGP_set{AgentNr}.MaxDataQuantity
+            LocalGP_set{AgentNr}.downdateParam(1);
+        end
+
+        LocalGP_set{AgentNr}.addPoint(x_i, y_i);
+
+        online_trigger_count(AgentNr) = online_trigger_count(AgentNr) + 1;
+    end
+end
+
 end

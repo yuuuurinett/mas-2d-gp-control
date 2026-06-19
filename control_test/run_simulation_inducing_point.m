@@ -4,7 +4,7 @@ function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMo
 %   2) Consensus ET:
 %      - DAC modes: dynamic average consensus ET through gp_masked_aggregation_update.
 %      - AC modes : static average consensus ET, following the dataset IP-AC logic.
-%
+
 % Modes:
 %   poe/gpoe/moe/bcm/rbcm       : IP-DAC + online learning ET
 %   poe_ac/gpoe_ac/...          : IP-AC  + online learning ET
@@ -26,7 +26,7 @@ m1 = 1;
 m2 = 1;
 L1 = 1;
 L2 = 1;
-g  = 9.8; %#ok<NASGU>
+g  = 9.8; 
 
 AgentQuantity = 6;
 LeaderQuantity = 1;
@@ -442,7 +442,7 @@ for t_Nr = 1:T-1
 
                 online_trigger_count(AgentNr) = online_trigger_count(AgentNr) + 1;
                 any_online_update = true;
-                updated_agents = [updated_agents; AgentNr]; %#ok<AGROW>
+                updated_agents = [updated_agents; AgentNr]; 
             end
         end
     end
