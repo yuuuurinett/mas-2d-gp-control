@@ -677,7 +677,9 @@ end
 %% ========================================================================
 %  Local helper: apply graph Laplacian along agent dimension
 %  ========================================================================
-function L_X = laplacian_multiply_agent_dim_local(X, L)
+function L_X = laplacian_multiply_age
+
+nt_dim_local(X, L)
 [p_dim, agent_quantity, num_points] = size(X);
 X_agent_first = permute(X, [2, 1, 3]);
 X_flat = reshape(X_agent_first, agent_quantity, []);

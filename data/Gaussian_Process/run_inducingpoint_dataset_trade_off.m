@@ -5,9 +5,9 @@ if nargin < 4, seed = 1; end
 if nargin < 5, NumInducingPoints_override = []; end
 rng(seed);
 
-% true  : compute predictive variance and NLPD
-% false : skip predictive variance; NLPD = NaN; mean-only test time
-compute_variance = false;
+% true  : compute predictive variance and NLPD/MSLL
+% false : skip predictive variance; NLPD/MSLL = NaN; mean-only test time
+compute_variance = true;
 
 fprintf('\n[诱导点] %s  seed=%d  tr=%.0f%%\n', DatasetName, seed, train_ratio*100);
 if compute_variance
@@ -206,7 +206,11 @@ end
 t_ip_inducing_prediction = toc(tic_inducing_prediction);
 fprintf('预计算完成: %.2fs\n', t_ip_inducing_prediction);
 
-SaveFolder = fullfile('Result','Dataset',DatasetName);
+% 用脚本自身所在路径作为项目根目录的锚点，避免因 MATLAB 当前工作目录
+% (pwd) 被意外切换（例如从子文件夹打开/运行脚本）导致 Result 文件夹
+% 定位错误、save 报 "does not exist"。
+ProjectRoot = fileparts(mfilename('fullpath'));
+SaveFolder = fullfile(ProjectRoot, 'Result','Dataset',DatasetName);
 if ~exist(SaveFolder,'dir'), mkdir(SaveFolder); end
 tr_tag = round(train_ratio*100);
 
@@ -469,18 +473,35 @@ for mi = 1:numel(AllModes)
 
     if compute_variance
         nlpd = mean(mean(0.5*(log(2*pi*var_pred) + err.^2 ./ var_pred)));
+
+        % MSLL (Mean Standardized Log Loss), per Rasmussen & Williams,
+        % GPML book, Eq. 2.34: "This loss can be standardized by
+        % subtracting the loss that would be obtained under the trivial
+        % model which predicts using a Gaussian with the MEAN AND
+        % VARIANCE OF THE TRAINING DATA."
+        % => baseline must use Y_mean / Y_std (training-set stats, already
+        %    computed in original scale above), NOT the test set.
+        % (Verified against the textbook screenshot; the earlier switch to
+        % Y_eval-based baseline was incorrect and has been reverted.)
+        Y_train_var_safe = max(Y_std.^2, 1e-10);   % [1 x y_dim], numerical safety
+        err_trivial = Y_eval - Y_mean;             % implicit expansion: [N_eval x y_dim]
+        nlpd_trivial = mean(mean(0.5*(log(2*pi*Y_train_var_safe) + ...
+            err_trivial.^2 ./ Y_train_var_safe)));
+
+        msll = nlpd - nlpd_trivial;
     else
         nlpd = NaN;
+        msll = NaN;
     end
 
     t_train_per_point = (t_train/N_train) * 1000;
     t_test_per_point  = (t_test/N_eval) * 1000;
 
     if compute_variance
-        fprintf('  SMSE=%.4f RMSE=%.4f NLPD=%.4f Train:%.2fms/pt Test:%.2fms/pt\n', ...
-            smse, rmse, nlpd, t_train_per_point, t_test_per_point);
+        fprintf('  SMSE=%.4f RMSE=%.4f NLPD=%.4f MSLL=%.4f Train:%.2fms/pt Test:%.2fms/pt\n', ...
+            smse, rmse, nlpd, msll, t_train_per_point, t_test_per_point);
     else
-        fprintf('  SMSE=%.4f RMSE=%.4f NLPD=NaN(mean-only) Train:%.2fms/pt Test:%.2fms/pt\n', ...
+        fprintf('  SMSE=%.4f RMSE=%.4f NLPD=NaN MSLL=NaN(mean-only) Train:%.2fms/pt Test:%.2fms/pt\n', ...
             smse, rmse, t_train_per_point, t_test_per_point);
     end
 
@@ -502,7 +523,7 @@ for mi = 1:numel(AllModes)
     event_count_mean = comm_train;
 
     save(fullfile(SaveFolder, sprintf('%s_M%d_tr%d_mc%d.mat', current_method, NumInducingPoints, tr_tag, seed)), ...
-        'smse', 'rmse', 'nlpd', ...
+        'smse', 'rmse', 'nlpd', 'msll', ...
         't_train_total', 't_test_total', ...
         't_train_per_point', 't_test_per_point', ...
         't_ip_local_gp_train', 't_ip_inducing_prediction', ...
