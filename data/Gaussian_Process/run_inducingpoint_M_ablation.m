@@ -1,7 +1,7 @@
 clear; clc;
 
 % Inducing-point ablation: M vs Train time, SMSE, MSLL
-DatasetName = 'SARCOS';
+DatasetName = 'KIN40K';
 train_ratio = 0.4;
 
 % Coarse scan: M from 100 to 2500, step 100 (25 points), across all 5

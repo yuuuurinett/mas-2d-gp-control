@@ -1,317 +1,443 @@
-%% plot_inducingpoint_M_tradeoff_summary.m
-% M-ablation 结果汇总图 (参照 Lederer et al. 2021, ICML, Figure 2 风格)
+%% plot_inducingpoint_M_tradeoff_paperstyle.m
+% Paper-style M-ablation summary:
+%   Fixed setting: IP-DAC / event-triggered consensus
+%   M = 100:100:2500
+%   Metrics: SMSE and MSLL
+%   Mean/std over Monte Carlo seeds
 %
-% 布局：
-%   每个 dataset 一幅图 (共4幅图)
-%   每幅图内 上下两排 subplot:
-%     上排 = SMSE, log scale, x轴 = M (诱导点数量)
-%     下排 = MSLL, 线性 scale, x轴 = M
-%   同一排subplot内, 5个method用不同颜色+marker画在一起(legend区分),
-%   方便横向对比不同aggregation方法在同一数据集上随M变化的表现
-%   数据: mean ± std, 跨 seeds 取统计量, errorbar 展示
-clc; close all;
+% Output:
+%   1) Overall figure: M = 100:2500
+%   2) Zoomed figure: M = 500:2500
+%   3) CSV summary table
+
+clear; clc; close all;
+
+%% ===================== User settings =====================
 
 Method_list  = {'poe','gpoe','moe','bcm','rbcm'};
 Method_label = {'POE','GPOE','MOE','BCM','RBCM'};
-Dataset_list = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
-M_list       = 100:100:2500;
-seeds        = 1:3;
-train_ratio  = 0.4;
-tr_tag       = round(train_ratio*100);
 
+Dataset_list = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
+
+M_list      = 100:100:2500;
+seeds       = 1:3;
+train_ratio = 0.4;
+tr_tag      = round(train_ratio * 100);
+
+% IMPORTANT:
+% If this script is inside:
+%   mas_2D_test/data/Gaussian_Process/
+% and your full result folder is:
+%   mas_2D_test/data/Gaussian_Process/Result/Dataset/...
+% then this is correct.
 ProjectRoot = fileparts(mfilename('fullpath'));
 
-% ---- 1. 读取全部数据，存进结构体 ----
-% data.(method).(dataset).SMSE_mean/std, MSLL_mean/std  -- 长度 = numel(M_list)
+% If you want to force the path manually, uncomment this:
+% ProjectRoot = '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process';
+
+ResultRoot = fullfile(ProjectRoot, 'Result', 'Dataset');
+
+FigFolder = fullfile(ProjectRoot, 'Result', 'Figures', 'M_ablation_paperstyle');
+if ~exist(FigFolder, 'dir')
+    mkdir(FigFolder);
+end
+
+show_errorbar = false;   % false = cleaner paper-style figure
+show_marker   = true;
+
+%% ===================== Plot style =====================
+
+% Color version: clearer for screen / slide / report.
+method_colors = [
+    0.00 0.00 0.00;   % POE  black
+    0.00 0.25 0.80;   % GPOE blue
+    0.80 0.10 0.10;   % MOE  red
+    0.10 0.55 0.10;   % BCM  green
+    0.55 0.10 0.70    % RBCM purple
+];
+
+% If you want black-white paper style, uncomment this:
+% method_colors = repmat([0 0 0], numel(Method_list), 1);
+
+method_markers = {'o','^','s','d','v'};
+method_lines   = {'-','-','-','-','-'};
+
+line_width  = 1.20;
+marker_size = 4.0;
+
+% Do not put marker on every point.
+marker_idx = 1:4:numel(M_list);
+
+% Sparse errorbar index, only used when show_errorbar = true.
+err_idx = 1:5:numel(M_list);
+
+%% ===================== Read data =====================
+
 data = struct();
+MissingCounter = 0;
 
 for ci = 1:numel(Method_list)
     method = Method_list{ci};
+
     for di = 1:numel(Dataset_list)
         dataset = Dataset_list{di};
-        ResultFolder = fullfile(ProjectRoot, 'Result','Dataset',dataset);
+
+        ResultFolder = fullfile(ResultRoot, dataset);
 
         SMSE_all = nan(numel(M_list), numel(seeds));
         MSLL_all = nan(numel(M_list), numel(seeds));
 
         for mi = 1:numel(M_list)
             M = M_list(mi);
+
             for si = 1:numel(seeds)
                 seed = seeds(si);
+
                 fname = sprintf('%s_M%d_tr%d_mc%d.mat', method, M, tr_tag, seed);
                 fpath = fullfile(ResultFolder, fname);
+
                 if ~exist(fpath, 'file')
-                    fprintf('[缺失] %s\n', fpath);
+                    MissingCounter = MissingCounter + 1;
+                    fprintf('[Missing] %s\n', fpath);
                     continue;
                 end
+
                 S = load(fpath, 'smse', 'msll');
-                if isfield(S,'smse'), SMSE_all(mi,si) = S.smse; end
-                if isfield(S,'msll'), MSLL_all(mi,si) = S.msll; end
+
+                if isfield(S, 'smse')
+                    SMSE_all(mi, si) = S.smse;
+                end
+
+                if isfield(S, 'msll')
+                    MSLL_all(mi, si) = S.msll;
+                end
             end
         end
 
         data.(method).(dataset).SMSE_mean = mean(SMSE_all, 2, 'omitnan');
         data.(method).(dataset).SMSE_std  = std(SMSE_all, 0, 2, 'omitnan');
+
         data.(method).(dataset).MSLL_mean = mean(MSLL_all, 2, 'omitnan');
         data.(method).(dataset).MSLL_std  = std(MSLL_all, 0, 2, 'omitnan');
+
+        data.(method).(dataset).SMSE_all = SMSE_all;
+        data.(method).(dataset).MSLL_all = MSLL_all;
     end
 end
 
-% ---- 2. (SMSE用log scale自动适配范围, MSLL同图对比5个method, 用MATLAB自动y轴缩放) ----
+fprintf('\nData loading finished. Missing files: %d\n', MissingCounter);
 
-% ---- 3. 画图: 每个 dataset 一幅图, 上排SMSE(log) + 下排MSLL(linear), 5个method同图对比 ----
-FigFolder = fullfile(ProjectRoot, 'Result','Figures','M_ablation');
-if ~exist(FigFolder, 'dir'), mkdir(FigFolder); end
+%% ===================== Export summary table =====================
 
-% 数据本身重叠严重, 颜色区分无意义(被遮挡), 改为全黑+marker形状区分,
-% 接近Lederer Fig.2用marker(不靠颜色)辨别曲线的思路
-method_colors = repmat([0,0,0], numel(Method_list), 1);  % 全部黑色
-method_markers = {'o','^','s','d','v'};
-marker_every = 2;  % 每隔几个数据点放一个marker, 避免25个点全标记太密
-
-% 自动识别放大区域: 取M_list后1/3区间(差异通常最小最难区分), 用于inset画中画
-inset_idx_start = ceil(2/3 * numel(M_list)) + 1;
-inset_M_range = [M_list(inset_idx_start), M_list(end)];
-
-% 先不加偏移, 直接对比5条原始曲线的可分辨程度
-offset_pct = 0.00;  % <<< 可调参数: 0=不偏移(先看原始效果); 如仍重叠可调到 0.05~0.10
-offset_factor = 1 + offset_pct * (0:numel(Method_list)-1);
+rows = {};
 
 for di = 1:numel(Dataset_list)
     dataset = Dataset_list{di};
 
-    fig = figure('Color','w','Position',[60,60,950,800], ...
-        'Name', sprintf('%s_SMSE_MSLL_vs_M', dataset));
-
-    % ---- 上排: SMSE, log scale ----
-    ax1 = subplot(2,1,1);
-    hold(ax1, 'on');
     for ci = 1:numel(Method_list)
         method = Method_list{ci};
         d = data.(method).(dataset);
-        % SMSE是正数: 乘法偏移保持相对比例一致, 不扭曲log scale下的形状
-        smse_offset = d.SMSE_mean * offset_factor(ci);
-        sparse_idx = 1:marker_every:numel(M_list);
-        % 完整误差棒+细线 (无marker, 避免25个点全标太密)
-        errorbar(ax1, M_list, smse_offset, d.SMSE_std, ...
-            '-', 'Color', method_colors(ci,:), 'LineWidth', 1.3, ...
-            'CapSize', 2, 'HandleVisibility', 'off');
-        % 在稀疏点上叠加marker (用于辨识方法, 不重复画线/误差棒)
-        plot(ax1, M_list(sparse_idx), smse_offset(sparse_idx), ...
-            'LineStyle', 'none', 'Marker', method_markers{ci}, ...
-            'Color', method_colors(ci,:), 'MarkerSize', 6, ...
-            'DisplayName', Method_label{ci});
-    end
-    set(ax1, 'YScale', 'log');
-    set(ax1, 'XScale', 'log');
-    xticks(ax1, [100, 200, 500, 1000, 2000, 2500]);
-    grid(ax1, 'on');
-    xlim(ax1, [M_list(1), M_list(end)]);
-    % 紧贴真实数据范围设置ylim, 避免log scale默认padding过宽导致曲线"扁"
-    all_smse_vals = [];
-    for ci = 1:numel(Method_list)
-        d_tmp = data.(Method_list{ci}).(dataset);
-        all_smse_vals = [all_smse_vals; d_tmp.SMSE_mean * offset_factor(ci) - d_tmp.SMSE_std; ...
-                                          d_tmp.SMSE_mean * offset_factor(ci) + d_tmp.SMSE_std]; %#ok<AGROW>
-    end
-    all_smse_vals = all_smse_vals(all_smse_vals > 0 & isfinite(all_smse_vals));
-    if ~isempty(all_smse_vals)
-        ylim(ax1, [min(all_smse_vals)*0.9, max(all_smse_vals)*1.1]);
-    end
-    ylabel(ax1, 'SMSE');
-    title(ax1, dataset, 'FontWeight','normal');
-    legend(ax1, 'Location','best', 'FontSize',8, 'NumColumns', 5);
-    hold(ax1, 'off');
 
-    % ---- SMSE 画中画: 放大M较大区间(差异最小最难区分的部分) ----
-    ax1_pos = get(ax1, 'Position');
-    ax1_inset = axes('Position', [ax1_pos(1)+ax1_pos(3)*0.45, ax1_pos(2)+ax1_pos(4)*0.45, ...
-                                    ax1_pos(3)*0.45, ax1_pos(4)*0.45]);
-    hold(ax1_inset, 'on');
-    inset_mask = M_list >= inset_M_range(1) & M_list <= inset_M_range(2);
-    all_smse_inset = [];
-    for ci = 1:numel(Method_list)
-        method = Method_list{ci};
-        d = data.(method).(dataset);
-        smse_offset = d.SMSE_mean * offset_factor(ci);
-        plot(ax1_inset, M_list(inset_mask), smse_offset(inset_mask), ...
-            '-', 'Marker', method_markers{ci}, 'Color', method_colors(ci,:), ...
-            'LineWidth', 1, 'MarkerSize', 4, 'MarkerIndices', 1:2:sum(inset_mask));
-        all_smse_inset = [all_smse_inset; smse_offset(inset_mask)]; %#ok<AGROW>
+        for mi = 1:numel(M_list)
+            rows(end+1,:) = { ...
+                dataset, ...
+                upper(method), ...
+                M_list(mi), ...
+                d.SMSE_mean(mi), ...
+                d.SMSE_std(mi), ...
+                d.MSLL_mean(mi), ...
+                d.MSLL_std(mi) ...
+            }; %#ok<SAGROW>
+        end
     end
-    box(ax1_inset, 'on');
-    grid(ax1_inset, 'on');
-    set(ax1_inset, 'FontSize', 7);
-    xlim(ax1_inset, inset_M_range);
-    if ~isempty(all_smse_inset) && range(all_smse_inset) > 0
-        pad_inset = 0.05 * range(all_smse_inset);
-        ylim(ax1_inset, [min(all_smse_inset)-pad_inset, max(all_smse_inset)+pad_inset]);
-    end
-    hold(ax1_inset, 'off');
-
-    % ---- 下排: MSLL, linear scale ----
-    ax2 = subplot(2,1,2);
-    hold(ax2, 'on');
-    % MSLL常为负数, 用加法偏移(每个method在原值上加一个小常数), 避免乘法
-    % 偏移在负数区间反转方向; 偏移量按该dataset所有method的MSLL范围的1%递增
-    all_msll_for_offset = [];
-    for ci = 1:numel(Method_list)
-        all_msll_for_offset = [all_msll_for_offset; data.(Method_list{ci}).(dataset).MSLL_mean]; %#ok<AGROW>
-    end
-    msll_range = max(all_msll_for_offset) - min(all_msll_for_offset);
-    msll_offset_step = offset_pct * msll_range;
-    for ci = 1:numel(Method_list)
-        method = Method_list{ci};
-        d = data.(method).(dataset);
-        msll_offset = d.MSLL_mean + msll_offset_step * (ci - 1);
-        sparse_idx = 1:marker_every:numel(M_list);
-        errorbar(ax2, M_list, msll_offset, d.MSLL_std, ...
-            '-', 'Color', method_colors(ci,:), 'LineWidth', 1.3, ...
-            'CapSize', 2, 'HandleVisibility', 'off');
-        plot(ax2, M_list(sparse_idx), msll_offset(sparse_idx), ...
-            'LineStyle', 'none', 'Marker', method_markers{ci}, ...
-            'Color', method_colors(ci,:), 'MarkerSize', 6, ...
-            'DisplayName', Method_label{ci});
-    end
-    set(ax2, 'XScale', 'log');
-    xticks(ax2, [100, 200, 500, 1000, 2000, 2500]);
-    grid(ax2, 'on');
-    xlim(ax2, [M_list(1), M_list(end)]);
-    % 紧贴真实数据范围设置ylim
-    all_msll_vals = [];
-    for ci = 1:numel(Method_list)
-        d_tmp = data.(Method_list{ci}).(dataset);
-        msll_off_tmp = d_tmp.MSLL_mean + msll_offset_step * (ci - 1);
-        all_msll_vals = [all_msll_vals; msll_off_tmp - d_tmp.MSLL_std; msll_off_tmp + d_tmp.MSLL_std]; %#ok<AGROW>
-    end
-    all_msll_vals = all_msll_vals(isfinite(all_msll_vals));
-    if ~isempty(all_msll_vals)
-        pad = 0.05 * (max(all_msll_vals) - min(all_msll_vals) + eps);
-        ylim(ax2, [min(all_msll_vals)-pad, max(all_msll_vals)+pad]);
-    end
-    xlabel(ax2, 'Number of inducing points M');
-    ylabel(ax2, 'MSLL');
-    hold(ax2, 'off');
-
-    % ---- MSLL 画中画: 放大M较大区间 ----
-    ax2_pos = get(ax2, 'Position');
-    ax2_inset = axes('Position', [ax2_pos(1)+ax2_pos(3)*0.45, ax2_pos(2)+ax2_pos(4)*0.10, ...
-                                    ax2_pos(3)*0.45, ax2_pos(4)*0.45]);
-    hold(ax2_inset, 'on');
-    all_msll_inset = [];
-    for ci = 1:numel(Method_list)
-        method = Method_list{ci};
-        d = data.(method).(dataset);
-        msll_offset = d.MSLL_mean + msll_offset_step * (ci - 1);
-        plot(ax2_inset, M_list(inset_mask), msll_offset(inset_mask), ...
-            '-', 'Marker', method_markers{ci}, 'Color', method_colors(ci,:), ...
-            'LineWidth', 1, 'MarkerSize', 4, 'MarkerIndices', 1:2:sum(inset_mask));
-        all_msll_inset = [all_msll_inset; msll_offset(inset_mask)]; %#ok<AGROW>
-    end
-    box(ax2_inset, 'on');
-    grid(ax2_inset, 'on');
-    set(ax2_inset, 'FontSize', 7);
-    xlim(ax2_inset, inset_M_range);
-    if ~isempty(all_msll_inset) && range(all_msll_inset) > 0
-        pad_inset2 = 0.05 * range(all_msll_inset);
-        ylim(ax2_inset, [min(all_msll_inset)-pad_inset2, max(all_msll_inset)+pad_inset2]);
-    end
-    hold(ax2_inset, 'off');
-
-    if offset_pct > 0
-        sgtitle(sprintf('%s: SMSE & MSLL vs M (Train=%.0f%%, mean \\pm std over %d seeds, curves offset %.0f%% for visibility)', ...
-            dataset, train_ratio*100, numel(seeds), offset_pct*100));
-    else
-        sgtitle(sprintf('%s: SMSE & MSLL vs M (Train=%.0f%%, mean \\pm std over %d seeds)', ...
-            dataset, train_ratio*100, numel(seeds)));
-    end
-
-    saveas(fig, fullfile(FigFolder, sprintf('%s_SMSE_MSLL_vs_M.png', dataset)));
-    savefig(fig, fullfile(FigFolder, sprintf('%s_SMSE_MSLL_vs_M.fig', dataset)));
 end
 
-fprintf('\n完成，共生成 %d 张图（%d datasets，每张上排SMSE+下排MSLL，5个method同图对比），已保存至 %s\n', ...
-    numel(Dataset_list), numel(Dataset_list), FigFolder);
+SummaryTable = cell2table(rows, ...
+    'VariableNames', {'Dataset','Method','M', ...
+    'SMSE_mean','SMSE_std','MSLL_mean','MSLL_std'});
 
-%% ---- 4. 计算"拐点区间": SMSE和MSLL都接近各自最优值时的M交集 ----
-% 容忍度: 5% (可调整 tol 改变区间宽度)
-tol = 0.05;
+csv_path = fullfile(FigFolder, 'M_ablation_summary_DAC_tr40.csv');
+writetable(SummaryTable, csv_path);
 
-fprintf('\n========================================================================\n');
-fprintf('  Sweet-spot M region per method/dataset\n');
-fprintf('  (M range where both SMSE and MSLL are within %.0f%% of their own optimum)\n', tol*100);
-fprintf('========================================================================\n');
-fprintf('%-6s %-12s %22s %22s %18s\n', 'Agg','Dataset','SMSE-OK range','MSLL-OK range','Sweet spot (M)');
-fprintf('%s\n', repmat('-',1,90));
+fprintf('Summary table saved to:\n%s\n', csv_path);
 
-sweet_spot_results = cell(numel(Method_list)*numel(Dataset_list), 6);
-row_idx = 0;
+%% ===================== Print best M summary =====================
 
-for ci = 1:numel(Method_list)
-    method = Method_list{ci};
-    for di = 1:numel(Dataset_list)
-        dataset = Dataset_list{di};
+fprintf('\n============================================================\n');
+fprintf('Best M summary based on minimum SMSE and minimum MSLL\n');
+fprintf('============================================================\n');
+fprintf('%-12s %-6s | %-22s | %-22s\n', ...
+    'Dataset', 'Method', 'Best SMSE', 'Best MSLL');
+fprintf('%s\n', repmat('-',1,72));
+
+for di = 1:numel(Dataset_list)
+    dataset = Dataset_list{di};
+
+    for ci = 1:numel(Method_list)
+        method = Method_list{ci};
         d = data.(method).(dataset);
 
-        % SMSE 是正数, 越小越好: 可接受范围 SMSE <= minSMSE*(1+tol)
-        minSMSE = min(d.SMSE_mean);
-        smse_ok_mask = d.SMSE_mean <= minSMSE * (1 + tol);
+        [best_smse, idx_smse] = min(d.SMSE_mean);
+        [best_msll, idx_msll] = min(d.MSLL_mean);
 
-        % MSLL 通常是负数, 越小(越负)越好: 可接受范围 MSLL <= minMSLL + tol*|minMSLL|
-        % (即不比最优值差超过 |minMSLL| 的 tol 比例; 若 minMSLL 接近 0 则退化处理)
-        minMSLL = min(d.MSLL_mean);
-        msll_ok_mask = d.MSLL_mean <= minMSLL + tol * abs(minMSLL);
+        fprintf('%-12s %-6s | M=%4d, %.4g       | M=%4d, %.4g\n', ...
+            dataset, upper(method), ...
+            M_list(idx_smse), best_smse, ...
+            M_list(idx_msll), best_msll);
+    end
+end
 
-        smse_ok_M = M_list(smse_ok_mask);
-        msll_ok_M = M_list(msll_ok_mask);
+fprintf('%s\n', repmat('-',1,72));
 
-        smse_range_str = sprintf('[%d, %d]', min(smse_ok_M), max(smse_ok_M));
-        msll_range_str = sprintf('[%d, %d]', min(msll_ok_M), max(msll_ok_M));
+%% ===================== Draw figures =====================
 
-        % 交集
-        sweet_M = intersect(smse_ok_M, msll_ok_M);
-        if isempty(sweet_M)
-            sweet_str = 'EMPTY (no overlap)';
-            sweet_lo = NaN; sweet_hi = NaN;
-        else
-            sweet_lo = min(sweet_M); sweet_hi = max(sweet_M);
-            if sweet_lo == sweet_hi
-                sweet_str = sprintf('%d', sweet_lo);
-            else
-                sweet_str = sprintf('[%d, %d]', sweet_lo, sweet_hi);
+draw_tradeoff_figure( ...
+    data, Method_list, Method_label, Dataset_list, M_list, ...
+    method_colors, method_markers, method_lines, ...
+    marker_idx, err_idx, show_errorbar, show_marker, ...
+    line_width, marker_size, ...
+    [100 2500], ...
+    'Effect of the Number of Inducing Points under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_overall_M100_2500'));
+
+draw_tradeoff_figure( ...
+    data, Method_list, Method_label, Dataset_list, M_list, ...
+    method_colors, method_markers, method_lines, ...
+    marker_idx, err_idx, show_errorbar, show_marker, ...
+    line_width, marker_size, ...
+    [500 2500], ...
+    'Zoomed View: Effect of the Number of Inducing Points under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_zoom_M500_2500'));
+
+fprintf('\nAll figures saved to:\n%s\n', FigFolder);
+
+%% ========================================================================
+%% Local function: draw one 2 x 4 paper-style figure
+%% ========================================================================
+
+function draw_tradeoff_figure( ...
+    data, Method_list, Method_label, Dataset_list, M_list, ...
+    method_colors, method_markers, method_lines, ...
+    marker_idx, err_idx, show_errorbar, show_marker, ...
+    line_width, marker_size, ...
+    x_range, fig_title, save_prefix)
+
+    nD = numel(Dataset_list);
+    nM = numel(Method_list);
+
+    x_mask = M_list >= x_range(1) & M_list <= x_range(2);
+    x_plot = M_list(x_mask);
+
+    fig = figure('Color','w', ...
+        'Units','centimeters', ...
+        'Position',[2, 2, 42, 17]);
+
+    tl = tiledlayout(2, nD, ...
+        'TileSpacing','compact', ...
+        'Padding','compact');
+
+    legend_handles = gobjects(nM, 1);
+
+    for di = 1:nD
+        dataset = Dataset_list{di};
+
+        %% -------------------- Top row: SMSE --------------------
+        ax1 = nexttile(di);
+        hold(ax1, 'on');
+
+        all_smse_vals = [];
+
+        for ci = 1:nM
+            method = Method_list{ci};
+            d = data.(method).(dataset);
+
+            y = d.SMSE_mean(:);
+            e = d.SMSE_std(:);
+
+            x = M_list(:);
+            valid = x_mask(:) & isfinite(y) & y > 0;
+
+            xv = x(valid);
+            yv = y(valid);
+            ev = e(valid);
+
+            if isempty(xv)
+                continue;
+            end
+
+            h = plot(ax1, xv, yv, ...
+                'LineStyle', method_lines{ci}, ...
+                'Color', method_colors(ci,:), ...
+                'LineWidth', line_width, ...
+                'DisplayName', Method_label{ci});
+
+            if show_marker
+                local_marker_idx = marker_idx(marker_idx <= numel(xv));
+                plot(ax1, xv(local_marker_idx), yv(local_marker_idx), ...
+                    'LineStyle','none', ...
+                    'Marker', method_markers{ci}, ...
+                    'MarkerSize', marker_size, ...
+                    'Color', method_colors(ci,:), ...
+                    'HandleVisibility','off');
+            end
+
+            if show_errorbar
+                local_err_idx = err_idx(err_idx <= numel(xv));
+                errorbar(ax1, xv(local_err_idx), yv(local_err_idx), ev(local_err_idx), ...
+                    'LineStyle','none', ...
+                    'Color', method_colors(ci,:), ...
+                    'LineWidth', 0.6, ...
+                    'CapSize', 2, ...
+                    'HandleVisibility','off');
+            end
+
+            all_smse_vals = [all_smse_vals; yv]; %#ok<AGROW>
+
+            if di == 1
+                legend_handles(ci) = h;
             end
         end
 
-        fprintf('%-6s %-12s %22s %22s %18s\n', ...
-            Method_label{ci}, dataset, smse_range_str, msll_range_str, sweet_str);
+        set(ax1, 'XScale','log', 'YScale','log');
+        xlim(ax1, x_range);
+        setup_x_ticks_scientific(ax1, x_range);
+        xticklabels(ax1, []);
 
-        row_idx = row_idx + 1;
-        sweet_spot_results(row_idx,:) = {Method_label{ci}, dataset, smse_range_str, msll_range_str, sweet_str, [sweet_lo, sweet_hi]};
+        grid(ax1, 'on');
+        box(ax1, 'on');
+
+        title(ax1, dataset, ...
+            'FontSize', 11, ...
+            'FontWeight','normal', ...
+            'Interpreter','none');
+
+        ylabel(ax1, 'SMSE', 'FontSize', 11);
+
+        set(ax1, ...
+            'FontSize', 9, ...
+            'LineWidth', 0.8, ...
+            'TickDir','out', ...
+            'TickLabelInterpreter','latex');
+
+        if ~isempty(all_smse_vals)
+            all_smse_vals = all_smse_vals(isfinite(all_smse_vals) & all_smse_vals > 0);
+            if ~isempty(all_smse_vals)
+                ylim(ax1, [min(all_smse_vals)*0.85, max(all_smse_vals)*1.20]);
+            end
+        end
+
+        %% -------------------- Bottom row: MSLL --------------------
+        ax2 = nexttile(nD + di);
+        hold(ax2, 'on');
+
+        all_msll_vals = [];
+
+        for ci = 1:nM
+            method = Method_list{ci};
+            d = data.(method).(dataset);
+
+            y = d.MSLL_mean(:);
+            e = d.MSLL_std(:);
+
+            x = M_list(:);
+            valid = x_mask(:) & isfinite(y);
+
+            xv = x(valid);
+            yv = y(valid);
+            ev = e(valid);
+
+            if isempty(xv)
+                continue;
+            end
+
+            plot(ax2, xv, yv, ...
+                'LineStyle', method_lines{ci}, ...
+                'Color', method_colors(ci,:), ...
+                'LineWidth', line_width, ...
+                'HandleVisibility','off');
+
+            if show_marker
+                local_marker_idx = marker_idx(marker_idx <= numel(xv));
+                plot(ax2, xv(local_marker_idx), yv(local_marker_idx), ...
+                    'LineStyle','none', ...
+                    'Marker', method_markers{ci}, ...
+                    'MarkerSize', marker_size, ...
+                    'Color', method_colors(ci,:), ...
+                    'HandleVisibility','off');
+            end
+
+            if show_errorbar
+                local_err_idx = err_idx(err_idx <= numel(xv));
+                errorbar(ax2, xv(local_err_idx), yv(local_err_idx), ev(local_err_idx), ...
+                    'LineStyle','none', ...
+                    'Color', method_colors(ci,:), ...
+                    'LineWidth', 0.6, ...
+                    'CapSize', 2, ...
+                    'HandleVisibility','off');
+            end
+
+            all_msll_vals = [all_msll_vals; yv]; %#ok<AGROW>
+        end
+
+        set(ax2, 'XScale','log');
+        xlim(ax2, x_range);
+        setup_x_ticks_scientific(ax2, x_range);
+
+        grid(ax2, 'on');
+        box(ax2, 'on');
+
+        xlabel(ax2, '$M$', ...
+            'FontSize', 11, ...
+            'Interpreter','latex');
+
+        ylabel(ax2, 'MSLL', 'FontSize', 11);
+
+        set(ax2, ...
+            'FontSize', 9, ...
+            'LineWidth', 0.8, ...
+            'TickDir','out', ...
+            'TickLabelInterpreter','latex');
+
+        if ~isempty(all_msll_vals)
+            all_msll_vals = all_msll_vals(isfinite(all_msll_vals));
+            if ~isempty(all_msll_vals)
+                pad = 0.08 * (max(all_msll_vals) - min(all_msll_vals) + eps);
+                ylim(ax2, [min(all_msll_vals)-pad, max(all_msll_vals)+pad]);
+            end
+        end
     end
-end
-fprintf('%s\n', repmat('-',1,90));
-fprintf('提示: "EMPTY" 表示该方法/数据集下 SMSE 和 MSLL 在 %.0f%% 容忍度内没有共同的M区间,\n', tol*100);
-fprintf('      说明两个指标在M选择上存在明显冲突, 需要人工权衡或放宽容忍度 tol 重新计算。\n');
-fprintf('若要在 sweet spot 内进一步精细扫描, 可在该区间用 step=10~20 重新跑\n');
-fprintf('      run_inducingpoint_M_ablation.m (改 M_list 即可)。\n');
 
-%% ---- 5. 导出 markdown 表格，方便直接粘贴进 Word ----
-md_path = fullfile(FigFolder, 'best_M_summary.md');
-fid = fopen(md_path, 'w');
-fprintf(fid, '## Sweet-spot M region per method/dataset\n\n');
-fprintf(fid, 'Train = %.0f%%, mean over %d seeds (seed = %d~%d). ', ...
-    train_ratio*100, numel(seeds), seeds(1), seeds(end));
-fprintf(fid, 'M range where both SMSE and MSLL are within %.0f%% of their own optimum (M_list = %d:%d:%d). ', ...
-    tol*100, M_list(1), M_list(2)-M_list(1), M_list(end));
-fprintf(fid, 'Sweet spot = intersection of the SMSE-OK and MSLL-OK ranges.\n\n');
-fprintf(fid, '| Agg | Dataset | SMSE-OK range | MSLL-OK range | Sweet spot (M) |\n');
-fprintf(fid, '|---|---|---|---|---|\n');
-for r = 1:row_idx
-    fprintf(fid, '| %s | %s | %s | %s | %s |\n', ...
-        sweet_spot_results{r,1}, sweet_spot_results{r,2}, sweet_spot_results{r,3}, ...
-        sweet_spot_results{r,4}, sweet_spot_results{r,5});
+    lgd = legend(legend_handles, Method_label, ...
+        'Orientation','horizontal', ...
+        'NumColumns', numel(Method_list), ...
+        'FontSize', 10, ...
+        'Box','off');
+
+    lgd.Layout.Tile = 'south';
+
+    title(tl, fig_title, ...
+        'FontSize', 13, ...
+        'FontWeight','normal');
+
+    exportgraphics(fig, [save_prefix '.png'], 'Resolution', 300);
+    exportgraphics(fig, [save_prefix '.pdf'], 'ContentType','vector');
+    savefig(fig, [save_prefix '.fig']);
 end
-fprintf(fid, '\n*Note: "EMPTY (no overlap)" means SMSE and MSLL do not share a common acceptable M range at this tolerance; consider relaxing `tol` or treating SMSE/MSLL trade-off explicitly for that case.*\n');
-fclose(fid);
-fprintf('\nMarkdown 表格已导出到: %s\n', md_path);
-fprintf('可直接打开该文件复制内容粘贴进 Word（支持 markdown 表格自动转换的版本）。\n');
+
+%% ========================================================================
+%% Local function: compact scientific x tick labels
+%% ========================================================================
+
+function setup_x_ticks_scientific(ax, x_range)
+
+    if x_range(1) <= 100
+        xticks(ax, [100 500 1000 2500]);
+        xticklabels(ax, {'$10^2$', '$5{\times}10^2$', '$10^3$', '$2.5{\times}10^3$'});
+    else
+        xticks(ax, [500 1000 1500 2000 2500]);
+        xticklabels(ax, {'$5{\times}10^2$', '$10^3$', '$1.5{\times}10^3$', ...
+                         '$2{\times}10^3$', '$2.5{\times}10^3$'});
+    end
+
+    ax.XMinorTick = 'off';
+end

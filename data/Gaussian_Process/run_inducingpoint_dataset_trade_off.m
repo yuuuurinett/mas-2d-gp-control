@@ -1,8 +1,25 @@
 function run_inducingpoint_dataset_trade_off(DatasetName, CurrentMode, train_ratio, seed, NumInducingPoints_override)
 
-if nargin < 3, train_ratio = 0.4; end
-if nargin < 4, seed = 1; end
-if nargin < 5, NumInducingPoints_override = []; end
+if nargin < 3 || isempty(train_ratio)
+    train_ratio = 0.4;
+end
+
+if nargin < 4 || isempty(seed)
+    seed = 1;
+end
+
+% For M-ablation, M must be explicitly provided by the wrapper.
+if nargin < 5 || isempty(NumInducingPoints_override)
+    error(['For M-ablation, NumInducingPoints M must be explicitly provided. ', ...
+           'Example: run_inducingpoint_dataset_trade_off(''KIN40K'', ''poe'', 0.4, 1, 1000).']);
+end
+
+NumInducingPoints = NumInducingPoints_override;
+
+if ~isscalar(NumInducingPoints) || NumInducingPoints <= 0 || NumInducingPoints ~= round(NumInducingPoints)
+    error('NumInducingPoints must be a positive integer. Current value: %g', NumInducingPoints);
+end
+
 rng(seed);
 
 % true  : compute predictive variance and NLPD/MSLL
@@ -99,7 +116,7 @@ prior_var = SigmaF^2;
 [N_train, x_dim] = size(X_train);
 y_dim = size(Y_train,2);
 N_eval = min(3000, size(X_test,1));
-X_eval = X_test(1:N_eval,:);
+X_eval = X_test(1:N_eval,:);   %从测试集中随机选 3000 个点用于 evaluation。
 Y_eval = Y_test(1:N_eval,:);
 Y_var_base = var(Y_eval,0,1);
 fprintf('Train=%d Test=%d x=%d y=%d\n', N_train, N_eval, x_dim, y_dim);
@@ -110,20 +127,6 @@ Kappa_P = 10;
 t_step = 0.01;
 MaxDataPerAgent = min(floor(N_train/AgentQuantity), 3000);
 
-if ~isempty(NumInducingPoints_override)
-    NumInducingPoints = NumInducingPoints_override;
-else
-    switch upper(DatasetName)
-        case {'KIN40K'}
-            NumInducingPoints = 2500;
-        case {'POL'}
-            NumInducingPoints = 2000;
-        case {'PUMADYN32NM'}
-            NumInducingPoints = 500;
-        otherwise
-            NumInducingPoints = 2500;
-    end
-end
 fprintf('NumInducingPoints M = %d\n', NumInducingPoints);
 
 MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(AgentQuantity,1);
@@ -206,9 +209,7 @@ end
 t_ip_inducing_prediction = toc(tic_inducing_prediction);
 fprintf('预计算完成: %.2fs\n', t_ip_inducing_prediction);
 
-% 用脚本自身所在路径作为项目根目录的锚点，避免因 MATLAB 当前工作目录
-% (pwd) 被意外切换（例如从子文件夹打开/运行脚本）导致 Result 文件夹
-% 定位错误、save 报 "does not exist"。
+
 ProjectRoot = fileparts(mfilename('fullpath'));
 SaveFolder = fullfile(ProjectRoot, 'Result','Dataset',DatasetName);
 if ~exist(SaveFolder,'dir'), mkdir(SaveFolder); end
@@ -442,7 +443,7 @@ for mi = 1:numel(AllModes)
 
     tic_mean = tic;
     mu_normalized = (Alpha_Vec' * K_star)';
-    %mu_pred = mu_normalized .* repmat(Y_std, N_eval, 1) + repmat(Y_mean, N_eval, 1);
+    %反归一化
     mu_pred = mu_normalized .* Y_std + Y_mean;
     t_ip_test_mean = toc(tic_mean);
 
@@ -450,7 +451,7 @@ for mi = 1:numel(AllModes)
     tic_variance = tic;
 
     V_matrix = Cholesky_L \ K_star;
-    var_normalized = max(SigmaF^2 - sum(V_matrix.^2, 1)', SigmaN^2);
+    var_normalized = SigmaF^2 - sum(V_matrix.^2, 1)';
 
     % MATLAB implicit expansion:
     % var_normalized: [N_eval x 1]
@@ -466,6 +467,67 @@ for mi = 1:numel(AllModes)
     t_test = toc(tic_test_total);
 
     %% Metrics
+    %% ================= Debug checks for de-normalization =================
+% This block checks whether mu_pred, var_pred, and the MSLL baseline
+% are all in the original output scale.
+
+debug_check_normalization = true;
+
+if debug_check_normalization
+
+    fprintf('\n========== Normalization / De-normalization Check ==========\n');
+
+    % ---- Check 1: output statistics ----
+    fprintf('Y_mean size:      %s\n', mat2str(size(Y_mean)));
+    fprintf('Y_std size:       %s\n', mat2str(size(Y_std)));
+    fprintf('Y_eval size:      %s\n', mat2str(size(Y_eval)));
+    fprintf('mu_pred size:     %s\n', mat2str(size(mu_pred)));
+    fprintf('var_pred size:    %s\n', mat2str(size(var_pred)));
+
+    fprintf('\nY_mean range:     [%.4g, %.4g]\n', min(Y_mean(:)), max(Y_mean(:)));
+    fprintf('Y_std range:      [%.4g, %.4g]\n', min(Y_std(:)), max(Y_std(:)));
+    fprintf('Y_eval range:     [%.4g, %.4g]\n', min(Y_eval(:)), max(Y_eval(:)));
+    fprintf('mu_pred range:    [%.4g, %.4g]\n', min(mu_pred(:)), max(mu_pred(:)));
+    fprintf('var_pred range:   [%.4g, %.4g]\n', min(var_pred(:)), max(var_pred(:)));
+
+    % ---- Check 2: variance must be positive ----
+    if any(var_pred(:) <= 0) || any(~isfinite(var_pred(:)))
+        warning('var_pred contains non-positive or non-finite values.');
+    else
+        fprintf('var_pred positivity check: OK\n');
+    end
+
+    % ---- Check 3: mu_pred and Y_eval should be in comparable scale ----
+    y_eval_std = std(Y_eval, 0, 1, 'omitnan');
+    mu_pred_std = std(mu_pred, 0, 1, 'omitnan');
+
+    fprintf('\nstd(Y_eval):      %s\n', mat2str(y_eval_std, 4));
+    fprintf('std(mu_pred):     %s\n', mat2str(mu_pred_std, 4));
+
+    ratio_mu_scale = mu_pred_std ./ max(y_eval_std, 1e-12);
+    fprintf('std(mu_pred) / std(Y_eval): %s\n', mat2str(ratio_mu_scale, 4));
+
+    if any(ratio_mu_scale < 0.05 | ratio_mu_scale > 20)
+        warning('mu_pred scale may be inconsistent with Y_eval.');
+    else
+        fprintf('mu_pred scale check: OK\n');
+    end
+
+    % ---- Check 4: baseline variance used in MSLL ----
+    Y_train_var_safe_debug = max(Y_std.^2, 1e-10);
+
+    fprintf('\nY_std.^2 range:   [%.4g, %.4g]\n', ...
+        min(Y_train_var_safe_debug(:)), max(Y_train_var_safe_debug(:)));
+
+    if any(Y_train_var_safe_debug(:) <= 0) || any(~isfinite(Y_train_var_safe_debug(:)))
+        warning('Baseline variance Y_std.^2 is invalid.');
+    else
+        fprintf('Baseline variance check: OK\n');
+    end
+
+    fprintf('============================================================\n\n');
+end
+
     err = Y_eval - mu_pred;
     Y_var_base_safe = max(Y_var_base, 1e-10);
     smse = mean(mean(err.^2) ./ Y_var_base_safe);
@@ -474,15 +536,6 @@ for mi = 1:numel(AllModes)
     if compute_variance
         nlpd = mean(mean(0.5*(log(2*pi*var_pred) + err.^2 ./ var_pred)));
 
-        % MSLL (Mean Standardized Log Loss), per Rasmussen & Williams,
-        % GPML book, Eq. 2.34: "This loss can be standardized by
-        % subtracting the loss that would be obtained under the trivial
-        % model which predicts using a Gaussian with the MEAN AND
-        % VARIANCE OF THE TRAINING DATA."
-        % => baseline must use Y_mean / Y_std (training-set stats, already
-        %    computed in original scale above), NOT the test set.
-        % (Verified against the textbook screenshot; the earlier switch to
-        % Y_eval-based baseline was incorrect and has been reverted.)
         Y_train_var_safe = max(Y_std.^2, 1e-10);   % [1 x y_dim], numerical safety
         err_trivial = Y_eval - Y_mean;             % implicit expansion: [N_eval x y_dim]
         nlpd_trivial = mean(mean(0.5*(log(2*pi*Y_train_var_safe) + ...
