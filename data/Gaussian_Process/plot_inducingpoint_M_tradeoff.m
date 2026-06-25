@@ -1,14 +1,16 @@
-%% plot_inducingpoint_M_tradeoff_paperstyle.m
+%% plot_inducingpoint_M_tradeoff.m
 % Paper-style M-ablation summary:
 %   Fixed setting: IP-DAC / event-triggered consensus
 %   M = 100:100:2500
-%   Metrics: SMSE and MSLL
+%   Metrics: SMSE, MSLL, and train time
 %   Mean/std over Monte Carlo seeds
 %
-% Output:
-%   1) Overall figure: M = 100:2500
-%   2) Zoomed figure: M = 500:2500
-%   3) CSV summary table
+% Changes in this pretty version:
+%   1) x-axis is plotted in units of 10^3, so ticks are simple: 0.1, 0.5, 1, 1.5, 2, 2.5
+%   2) x-axis label is M (x10^3), avoiding crowded scientific tick labels
+%   3) zoomed view uses M >= 1000 by default, better for POL/SARCOS details
+%   4) adaptive y-limits for each subplot
+%   5) additional cost-aware plots: Train Time vs SMSE and Train Time vs MSLL
 
 clear; clc; close all;
 
@@ -24,30 +26,29 @@ seeds       = 1:3;
 train_ratio = 0.4;
 tr_tag      = round(train_ratio * 100);
 
-% IMPORTANT:
-% If this script is inside:
-%   mas_2D_test/data/Gaussian_Process/
-% and your full result folder is:
-%   mas_2D_test/data/Gaussian_Process/Result/Dataset/...
-% then this is correct.
 ProjectRoot = fileparts(mfilename('fullpath'));
-
-% If you want to force the path manually, uncomment this:
+% If needed, force it manually:
 % ProjectRoot = '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process';
 
 ResultRoot = fullfile(ProjectRoot, 'Result', 'Dataset');
 
-FigFolder = fullfile(ProjectRoot, 'Result', 'Figures', 'M_ablation_paperstyle');
+FigFolder = fullfile(ProjectRoot, 'Result', 'Figures', 'M_ablation_pretty');
 if ~exist(FigFolder, 'dir')
     mkdir(FigFolder);
 end
 
-show_errorbar = false;   % false = cleaner paper-style figure
+show_errorbar = false;
 show_marker   = true;
+
+% M is displayed in units of 10^3 on the x-axis.
+x_unit = 1000;
+
+% Overall and zoom ranges in original M units.
+overall_range = [100 2500];
+zoom_range    = [1000 2500];
 
 %% ===================== Plot style =====================
 
-% Color version: clearer for screen / slide / report.
 method_colors = [
     0.00 0.00 0.00;   % POE  black
     0.00 0.25 0.80;   % GPOE blue
@@ -56,20 +57,15 @@ method_colors = [
     0.55 0.10 0.70    % RBCM purple
 ];
 
-% If you want black-white paper style, uncomment this:
-% method_colors = repmat([0 0 0], numel(Method_list), 1);
-
 method_markers = {'o','^','s','d','v'};
 method_lines   = {'-','-','-','-','-'};
 
-line_width  = 1.20;
-marker_size = 4.0;
+line_width  = 1.35;
+marker_size = 4.2;
 
-% Do not put marker on every point.
+% Marker density. For zoom view this is recalculated locally.
 marker_idx = 1:4:numel(M_list);
-
-% Sparse errorbar index, only used when show_errorbar = true.
-err_idx = 1:5:numel(M_list);
+err_idx    = 1:5:numel(M_list);
 
 %% ===================== Read data =====================
 
@@ -86,6 +82,7 @@ for ci = 1:numel(Method_list)
 
         SMSE_all = nan(numel(M_list), numel(seeds));
         MSLL_all = nan(numel(M_list), numel(seeds));
+        TrainTime_all = nan(numel(M_list), numel(seeds));   % ms/pt
 
         for mi = 1:numel(M_list)
             M = M_list(mi);
@@ -102,7 +99,7 @@ for ci = 1:numel(Method_list)
                     continue;
                 end
 
-                S = load(fpath, 'smse', 'msll');
+                S = load(fpath, 'smse', 'msll', 't_train_per_point', 't_train_total', 'N_train');
 
                 if isfield(S, 'smse')
                     SMSE_all(mi, si) = S.smse;
@@ -110,6 +107,15 @@ for ci = 1:numel(Method_list)
 
                 if isfield(S, 'msll')
                     MSLL_all(mi, si) = S.msll;
+                end
+
+                % Training time in ms/pt. New result files should contain
+                % t_train_per_point directly. For older result files, fall
+                % back to t_train_total / N_train.
+                if isfield(S, 't_train_per_point')
+                    TrainTime_all(mi, si) = S.t_train_per_point;
+                elseif isfield(S, 't_train_total') && isfield(S, 'N_train') && S.N_train > 0
+                    TrainTime_all(mi, si) = (S.t_train_total / S.N_train) * 1000;
                 end
             end
         end
@@ -120,8 +126,12 @@ for ci = 1:numel(Method_list)
         data.(method).(dataset).MSLL_mean = mean(MSLL_all, 2, 'omitnan');
         data.(method).(dataset).MSLL_std  = std(MSLL_all, 0, 2, 'omitnan');
 
+        data.(method).(dataset).TrainTime_mean = mean(TrainTime_all, 2, 'omitnan');
+        data.(method).(dataset).TrainTime_std  = std(TrainTime_all, 0, 2, 'omitnan');
+
         data.(method).(dataset).SMSE_all = SMSE_all;
         data.(method).(dataset).MSLL_all = MSLL_all;
+        data.(method).(dataset).TrainTime_all = TrainTime_all;
     end
 end
 
@@ -146,7 +156,9 @@ for di = 1:numel(Dataset_list)
                 d.SMSE_mean(mi), ...
                 d.SMSE_std(mi), ...
                 d.MSLL_mean(mi), ...
-                d.MSLL_std(mi) ...
+                d.MSLL_std(mi), ...
+                d.TrainTime_mean(mi), ...
+                d.TrainTime_std(mi) ...
             }; %#ok<SAGROW>
         end
     end
@@ -154,21 +166,21 @@ end
 
 SummaryTable = cell2table(rows, ...
     'VariableNames', {'Dataset','Method','M', ...
-    'SMSE_mean','SMSE_std','MSLL_mean','MSLL_std'});
+    'SMSE_mean','SMSE_std','MSLL_mean','MSLL_std', ...
+    'TrainTime_mspt_mean','TrainTime_mspt_std'});
 
 csv_path = fullfile(FigFolder, 'M_ablation_summary_DAC_tr40.csv');
 writetable(SummaryTable, csv_path);
-
 fprintf('Summary table saved to:\n%s\n', csv_path);
 
 %% ===================== Print best M summary =====================
 
 fprintf('\n============================================================\n');
-fprintf('Best M summary based on minimum SMSE and minimum MSLL\n');
+fprintf('Best M summary based on minimum SMSE, minimum MSLL, and train time\n');
 fprintf('============================================================\n');
-fprintf('%-12s %-6s | %-22s | %-22s\n', ...
-    'Dataset', 'Method', 'Best SMSE', 'Best MSLL');
-fprintf('%s\n', repmat('-',1,72));
+fprintf('%-12s %-6s | %-22s | %-22s | %-18s\n', ...
+    'Dataset', 'Method', 'Best SMSE', 'Best MSLL', 'Time@BestMSLL');
+fprintf('%s\n', repmat('-',1,96));
 
 for di = 1:numel(Dataset_list)
     dataset = Dataset_list{di};
@@ -180,10 +192,13 @@ for di = 1:numel(Dataset_list)
         [best_smse, idx_smse] = min(d.SMSE_mean);
         [best_msll, idx_msll] = min(d.MSLL_mean);
 
-        fprintf('%-12s %-6s | M=%4d, %.4g       | M=%4d, %.4g\n', ...
+        time_best_msll = d.TrainTime_mean(idx_msll);
+
+        fprintf('%-12s %-6s | M=%4d, %.4g       | M=%4d, %.4g       | %.4g ms/pt\n', ...
             dataset, upper(method), ...
             M_list(idx_smse), best_smse, ...
-            M_list(idx_msll), best_msll);
+            M_list(idx_msll), best_msll, ...
+            time_best_msll);
     end
 end
 
@@ -192,22 +207,40 @@ fprintf('%s\n', repmat('-',1,72));
 %% ===================== Draw figures =====================
 
 draw_tradeoff_figure( ...
-    data, Method_list, Method_label, Dataset_list, M_list, ...
+    data, Method_list, Method_label, Dataset_list, M_list, x_unit, ...
     method_colors, method_markers, method_lines, ...
     marker_idx, err_idx, show_errorbar, show_marker, ...
     line_width, marker_size, ...
-    [100 2500], ...
+    overall_range, false, ...
     'Effect of the Number of Inducing Points under IP-DAC', ...
-    fullfile(FigFolder, 'M_ablation_overall_M100_2500'));
+    fullfile(FigFolder, 'M_ablation_overall_M100_2500_pretty'));
 
 draw_tradeoff_figure( ...
-    data, Method_list, Method_label, Dataset_list, M_list, ...
+    data, Method_list, Method_label, Dataset_list, M_list, x_unit, ...
     method_colors, method_markers, method_lines, ...
     marker_idx, err_idx, show_errorbar, show_marker, ...
     line_width, marker_size, ...
-    [500 2500], ...
-    'Zoomed View: Effect of the Number of Inducing Points under IP-DAC', ...
-    fullfile(FigFolder, 'M_ablation_zoom_M500_2500'));
+    zoom_range, true, ...
+    'Zoomed View for $M \geq 10^3$ under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_zoom_M1000_2500_pretty'));
+
+% Additional cost-aware figure requested by the supervisor:
+% x-axis = training time, y-axis = SMSE / MSLL.
+draw_time_tradeoff_figure( ...
+    data, Method_list, Method_label, Dataset_list, M_list, ...
+    method_colors, method_markers, method_lines, ...
+    line_width, marker_size, ...
+    overall_range, false, ...
+    'Train-Time Trade-off under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_train_time_tradeoff_overall'));
+
+draw_time_tradeoff_figure( ...
+    data, Method_list, Method_label, Dataset_list, M_list, ...
+    method_colors, method_markers, method_lines, ...
+    line_width, marker_size, ...
+    zoom_range, true, ...
+    'Zoomed Train-Time Trade-off for $M \geq 10^3$ under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_train_time_tradeoff_zoom_M1000_2500'));
 
 fprintf('\nAll figures saved to:\n%s\n', FigFolder);
 
@@ -216,21 +249,32 @@ fprintf('\nAll figures saved to:\n%s\n', FigFolder);
 %% ========================================================================
 
 function draw_tradeoff_figure( ...
-    data, Method_list, Method_label, Dataset_list, M_list, ...
+    data, Method_list, Method_label, Dataset_list, M_list, x_unit, ...
     method_colors, method_markers, method_lines, ...
     marker_idx, err_idx, show_errorbar, show_marker, ...
     line_width, marker_size, ...
-    x_range, fig_title, save_prefix)
+    x_range_M, is_zoom, fig_title, save_prefix)
 
     nD = numel(Dataset_list);
     nM = numel(Method_list);
 
-    x_mask = M_list >= x_range(1) & M_list <= x_range(2);
-    x_plot = M_list(x_mask);
+    x_mask = M_list >= x_range_M(1) & M_list <= x_range_M(2);
+    x_plot_all = M_list(:) / x_unit;
+    x_range = x_range_M / x_unit;
+
+    if is_zoom
+        fig_pos = [2, 2, 42, 17.5];
+        smse_min_range = 0.006;
+        msll_min_range = 0.040;
+    else
+        fig_pos = [2, 2, 42, 17.5];
+        smse_min_range = 0.015;
+        msll_min_range = 0.080;
+    end
 
     fig = figure('Color','w', ...
         'Units','centimeters', ...
-        'Position',[2, 2, 42, 17]);
+        'Position',fig_pos);
 
     tl = tiledlayout(2, nD, ...
         'TileSpacing','compact', ...
@@ -254,10 +298,9 @@ function draw_tradeoff_figure( ...
             y = d.SMSE_mean(:);
             e = d.SMSE_std(:);
 
-            x = M_list(:);
             valid = x_mask(:) & isfinite(y) & y > 0;
 
-            xv = x(valid);
+            xv = x_plot_all(valid);
             yv = y(valid);
             ev = e(valid);
 
@@ -272,7 +315,7 @@ function draw_tradeoff_figure( ...
                 'DisplayName', Method_label{ci});
 
             if show_marker
-                local_marker_idx = marker_idx(marker_idx <= numel(xv));
+                local_marker_idx = choose_marker_indices(numel(xv), is_zoom);
                 plot(ax1, xv(local_marker_idx), yv(local_marker_idx), ...
                     'LineStyle','none', ...
                     'Marker', method_markers{ci}, ...
@@ -298,33 +341,28 @@ function draw_tradeoff_figure( ...
             end
         end
 
-        set(ax1, 'XScale','log', 'YScale','log');
+        set(ax1, 'YScale','log');
         xlim(ax1, x_range);
-        setup_x_ticks_scientific(ax1, x_range);
+        setup_x_ticks_scaled(ax1, x_range_M, x_unit, false);
         xticklabels(ax1, []);
 
         grid(ax1, 'on');
         box(ax1, 'on');
 
         title(ax1, dataset, ...
-            'FontSize', 11, ...
+            'FontSize', 12, ...
             'FontWeight','normal', ...
             'Interpreter','none');
 
-        ylabel(ax1, 'SMSE', 'FontSize', 11);
+        ylabel(ax1, 'SMSE', 'FontSize', 12);
 
         set(ax1, ...
-            'FontSize', 9, ...
-            'LineWidth', 0.8, ...
+            'FontSize', 10, ...
+            'LineWidth', 0.85, ...
             'TickDir','out', ...
             'TickLabelInterpreter','latex');
 
-        if ~isempty(all_smse_vals)
-            all_smse_vals = all_smse_vals(isfinite(all_smse_vals) & all_smse_vals > 0);
-            if ~isempty(all_smse_vals)
-                ylim(ax1, [min(all_smse_vals)*0.85, max(all_smse_vals)*1.20]);
-            end
-        end
+        apply_log_ylim(ax1, all_smse_vals, 0.07, smse_min_range);
 
         %% -------------------- Bottom row: MSLL --------------------
         ax2 = nexttile(nD + di);
@@ -339,10 +377,9 @@ function draw_tradeoff_figure( ...
             y = d.MSLL_mean(:);
             e = d.MSLL_std(:);
 
-            x = M_list(:);
             valid = x_mask(:) & isfinite(y);
 
-            xv = x(valid);
+            xv = x_plot_all(valid);
             yv = y(valid);
             ev = e(valid);
 
@@ -357,7 +394,7 @@ function draw_tradeoff_figure( ...
                 'HandleVisibility','off');
 
             if show_marker
-                local_marker_idx = marker_idx(marker_idx <= numel(xv));
+                local_marker_idx = choose_marker_indices(numel(xv), is_zoom);
                 plot(ax2, xv(local_marker_idx), yv(local_marker_idx), ...
                     'LineStyle','none', ...
                     'Marker', method_markers{ci}, ...
@@ -379,45 +416,231 @@ function draw_tradeoff_figure( ...
             all_msll_vals = [all_msll_vals; yv]; %#ok<AGROW>
         end
 
-        set(ax2, 'XScale','log');
         xlim(ax2, x_range);
-        setup_x_ticks_scientific(ax2, x_range);
+        setup_x_ticks_scaled(ax2, x_range_M, x_unit, true);
 
         grid(ax2, 'on');
         box(ax2, 'on');
 
-        xlabel(ax2, '$M$', ...
-            'FontSize', 11, ...
+        xlabel(ax2, '$M\;(\times 10^3)$', ...
+            'FontSize', 12, ...
             'Interpreter','latex');
 
-        ylabel(ax2, 'MSLL', 'FontSize', 11);
+        ylabel(ax2, 'MSLL', 'FontSize', 12);
 
         set(ax2, ...
-            'FontSize', 9, ...
-            'LineWidth', 0.8, ...
+            'FontSize', 10, ...
+            'LineWidth', 0.85, ...
             'TickDir','out', ...
             'TickLabelInterpreter','latex');
 
-        if ~isempty(all_msll_vals)
-            all_msll_vals = all_msll_vals(isfinite(all_msll_vals));
-            if ~isempty(all_msll_vals)
-                pad = 0.08 * (max(all_msll_vals) - min(all_msll_vals) + eps);
-                ylim(ax2, [min(all_msll_vals)-pad, max(all_msll_vals)+pad]);
-            end
-        end
+        apply_linear_ylim(ax2, all_msll_vals, 0.08, msll_min_range);
     end
 
     lgd = legend(legend_handles, Method_label, ...
         'Orientation','horizontal', ...
         'NumColumns', numel(Method_list), ...
-        'FontSize', 10, ...
+        'FontSize', 11, ...
         'Box','off');
 
     lgd.Layout.Tile = 'south';
 
     title(tl, fig_title, ...
-        'FontSize', 13, ...
-        'FontWeight','normal');
+        'FontSize', 15, ...
+        'FontWeight','normal', ...
+        'Interpreter','latex');
+
+    exportgraphics(fig, [save_prefix '.png'], 'Resolution', 300);
+    exportgraphics(fig, [save_prefix '.pdf'], 'ContentType','vector');
+    savefig(fig, [save_prefix '.fig']);
+end
+
+
+%% ========================================================================
+%% Local function: draw train-time trade-off figure
+%% ========================================================================
+
+function draw_time_tradeoff_figure( ...
+    data, Method_list, Method_label, Dataset_list, M_list, ...
+    method_colors, method_markers, method_lines, ...
+    line_width, marker_size, ...
+    x_range_M, is_zoom, fig_title, save_prefix)
+
+    nD = numel(Dataset_list);
+    nM = numel(Method_list);
+
+    x_mask = M_list >= x_range_M(1) & M_list <= x_range_M(2);
+
+    if is_zoom
+        fig_pos = [2, 2, 42, 17.5];
+        smse_min_range = 0.006;
+        msll_min_range = 0.040;
+    else
+        fig_pos = [2, 2, 42, 17.5];
+        smse_min_range = 0.015;
+        msll_min_range = 0.080;
+    end
+
+    fig = figure('Color','w', ...
+        'Units','centimeters', ...
+        'Position',fig_pos);
+
+    tl = tiledlayout(2, nD, ...
+        'TileSpacing','compact', ...
+        'Padding','compact');
+
+    legend_handles = gobjects(nM, 1);
+
+    for di = 1:nD
+        dataset = Dataset_list{di};
+
+        %% -------------------- Top row: Train time vs SMSE --------------------
+        ax1 = nexttile(di);
+        hold(ax1, 'on');
+
+        all_smse_vals = [];
+        all_time_vals = [];
+
+        for ci = 1:nM
+            method = Method_list{ci};
+            d = data.(method).(dataset);
+
+            x = d.TrainTime_mean(:);   % ms/pt
+            y = d.SMSE_mean(:);
+
+            valid = x_mask(:) & isfinite(x) & isfinite(y) & x > 0 & y > 0;
+            xv = x(valid);
+            yv = y(valid);
+            Mv = M_list(valid);
+
+            if isempty(xv)
+                continue;
+            end
+
+            % Sort by M, not by time, because the line represents increasing M.
+            [Mv, order] = sort(Mv); %#ok<ASGLU>
+            xv = xv(order);
+            yv = yv(order);
+
+            h = plot(ax1, xv, yv, ...
+                'LineStyle', method_lines{ci}, ...
+                'Color', method_colors(ci,:), ...
+                'LineWidth', line_width, ...
+                'DisplayName', Method_label{ci});
+
+            local_marker_idx = choose_marker_indices(numel(xv), is_zoom);
+            plot(ax1, xv(local_marker_idx), yv(local_marker_idx), ...
+                'LineStyle','none', ...
+                'Marker', method_markers{ci}, ...
+                'MarkerSize', marker_size, ...
+                'Color', method_colors(ci,:), ...
+                'HandleVisibility','off');
+
+            all_smse_vals = [all_smse_vals; yv]; %#ok<AGROW>
+            all_time_vals = [all_time_vals; xv]; %#ok<AGROW>
+
+            if di == 1
+                legend_handles(ci) = h;
+            end
+        end
+
+        set(ax1, 'YScale','log');
+        apply_linear_xlim(ax1, all_time_vals, 0.08, 0.02);
+        apply_log_ylim(ax1, all_smse_vals, 0.07, smse_min_range);
+
+        grid(ax1, 'on');
+        box(ax1, 'on');
+
+        title(ax1, dataset, ...
+            'FontSize', 12, ...
+            'FontWeight','normal', ...
+            'Interpreter','none');
+
+        ylabel(ax1, 'SMSE', 'FontSize', 12);
+        xticklabels(ax1, []);
+
+        set(ax1, ...
+            'FontSize', 10, ...
+            'LineWidth', 0.85, ...
+            'TickDir','out', ...
+            'TickLabelInterpreter','latex');
+
+        %% -------------------- Bottom row: Train time vs MSLL --------------------
+        ax2 = nexttile(nD + di);
+        hold(ax2, 'on');
+
+        all_msll_vals = [];
+        all_time_vals = [];
+
+        for ci = 1:nM
+            method = Method_list{ci};
+            d = data.(method).(dataset);
+
+            x = d.TrainTime_mean(:);   % ms/pt
+            y = d.MSLL_mean(:);
+
+            valid = x_mask(:) & isfinite(x) & isfinite(y) & x > 0;
+            xv = x(valid);
+            yv = y(valid);
+            Mv = M_list(valid);
+
+            if isempty(xv)
+                continue;
+            end
+
+            [Mv, order] = sort(Mv); %#ok<ASGLU>
+            xv = xv(order);
+            yv = yv(order);
+
+            plot(ax2, xv, yv, ...
+                'LineStyle', method_lines{ci}, ...
+                'Color', method_colors(ci,:), ...
+                'LineWidth', line_width, ...
+                'HandleVisibility','off');
+
+            local_marker_idx = choose_marker_indices(numel(xv), is_zoom);
+            plot(ax2, xv(local_marker_idx), yv(local_marker_idx), ...
+                'LineStyle','none', ...
+                'Marker', method_markers{ci}, ...
+                'MarkerSize', marker_size, ...
+                'Color', method_colors(ci,:), ...
+                'HandleVisibility','off');
+
+            all_msll_vals = [all_msll_vals; yv]; %#ok<AGROW>
+            all_time_vals = [all_time_vals; xv]; %#ok<AGROW>
+        end
+
+        apply_linear_xlim(ax2, all_time_vals, 0.08, 0.02);
+        apply_linear_ylim(ax2, all_msll_vals, 0.08, msll_min_range);
+
+        grid(ax2, 'on');
+        box(ax2, 'on');
+
+        xlabel(ax2, 'Train Time (ms/pt)', ...
+            'FontSize', 12, ...
+            'Interpreter','none');
+
+        ylabel(ax2, 'MSLL', 'FontSize', 12);
+
+        set(ax2, ...
+            'FontSize', 10, ...
+            'LineWidth', 0.85, ...
+            'TickDir','out', ...
+            'TickLabelInterpreter','latex');
+    end
+
+    lgd = legend(legend_handles, Method_label, ...
+        'Orientation','horizontal', ...
+        'NumColumns', numel(Method_list), ...
+        'FontSize', 11, ...
+        'Box','off');
+
+    lgd.Layout.Tile = 'south';
+
+    title(tl, fig_title, ...
+        'FontSize', 15, ...
+        'FontWeight','normal', ...
+        'Interpreter','latex');
 
     exportgraphics(fig, [save_prefix '.png'], 'Resolution', 300);
     exportgraphics(fig, [save_prefix '.pdf'], 'ContentType','vector');
@@ -425,19 +648,113 @@ function draw_tradeoff_figure( ...
 end
 
 %% ========================================================================
-%% Local function: compact scientific x tick labels
+%% Local function: simple x tick labels in units of 10^3
 %% ========================================================================
 
-function setup_x_ticks_scientific(ax, x_range)
+function setup_x_ticks_scaled(ax, x_range_M, x_unit, show_labels)
 
-    if x_range(1) <= 100
-        xticks(ax, [100 500 1000 2500]);
-        xticklabels(ax, {'$10^2$', '$5{\times}10^2$', '$10^3$', '$2.5{\times}10^3$'});
+    if x_range_M(1) <= 100
+        ticks_M = [100 500 1000 1500 2000 2500];
+        labels  = {'0.1','0.5','1','1.5','2','2.5'};
+    elseif x_range_M(1) <= 500
+        ticks_M = [500 1000 1500 2000 2500];
+        labels  = {'0.5','1','1.5','2','2.5'};
     else
-        xticks(ax, [500 1000 1500 2000 2500]);
-        xticklabels(ax, {'$5{\times}10^2$', '$10^3$', '$1.5{\times}10^3$', ...
-                         '$2{\times}10^3$', '$2.5{\times}10^3$'});
+        ticks_M = [1000 1500 2000 2500];
+        labels  = {'1','1.5','2','2.5'};
+    end
+
+    xticks(ax, ticks_M / x_unit);
+
+    if show_labels
+        xticklabels(ax, labels);
+    else
+        xticklabels(ax, []);
     end
 
     ax.XMinorTick = 'off';
+end
+
+%% ========================================================================
+%% Local function: y-axis helpers
+%% ========================================================================
+
+function apply_linear_xlim(ax, x_values, pad_ratio, min_range)
+    x_values = x_values(:);
+    x_values = x_values(isfinite(x_values));
+
+    if isempty(x_values)
+        return;
+    end
+
+    x_min = min(x_values);
+    x_max = max(x_values);
+    x_range = x_max - x_min;
+
+    if x_range < min_range
+        x_center = 0.5 * (x_min + x_max);
+        xlim(ax, [max(0, x_center - min_range/2), x_center + min_range/2]);
+    else
+        pad = pad_ratio * x_range;
+        xlim(ax, [max(0, x_min - pad), x_max + pad]);
+    end
+end
+
+function apply_log_ylim(ax, y_values, log_pad, min_log_span)
+    y_values = y_values(:);
+    y_values = y_values(isfinite(y_values) & y_values > 0);
+
+    if isempty(y_values)
+        return;
+    end
+
+    log_y = log10(y_values);
+    lo = min(log_y);
+    hi = max(log_y);
+    span = hi - lo;
+
+    if span < min_log_span
+        center = 0.5 * (lo + hi);
+        lo = center - min_log_span/2;
+        hi = center + min_log_span/2;
+    else
+        lo = lo - log_pad * span;
+        hi = hi + log_pad * span;
+    end
+
+    ylim(ax, 10.^[lo hi]);
+end
+
+function apply_linear_ylim(ax, y_values, pad_ratio, min_range)
+    y_values = y_values(:);
+    y_values = y_values(isfinite(y_values));
+
+    if isempty(y_values)
+        return;
+    end
+
+    y_min = min(y_values);
+    y_max = max(y_values);
+    y_range = y_max - y_min;
+
+    if y_range < min_range
+        y_center = 0.5 * (y_min + y_max);
+        ylim(ax, [y_center - min_range/2, y_center + min_range/2]);
+    else
+        pad = pad_ratio * y_range;
+        ylim(ax, [y_min - pad, y_max + pad]);
+    end
+end
+
+function idx = choose_marker_indices(n, is_zoom)
+    if n <= 0
+        idx = [];
+        return;
+    end
+
+    if is_zoom
+        idx = unique([1, round(linspace(1,n,min(5,n))), n]);
+    else
+        idx = unique([1, round(linspace(1,n,min(6,n))), n]);
+    end
 end

@@ -1,15 +1,16 @@
 function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation)
-% Two-layer ET version:
-%   1) Online learning ET: decides whether to add online data to LocalGP.
-%   2) Consensus ET:
+% Inducing-point online learning version requested by advisor:
+%   1) Zero offline samples: each LocalGP starts from the prior.
+%   2) No online data trigger: every agent adds one online sample at every time step.
+%   3) Consensus communication ET is still kept:
 %      - DAC modes: dynamic average consensus ET through gp_masked_aggregation_update.
-%      - AC modes : static average consensus ET, following the dataset IP-AC logic.
-
+%      - AC modes : static average consensus ET following the dataset IP-AC logic.
+%
 % Modes:
-%   poe/gpoe/moe/bcm/rbcm       : IP-DAC + online learning ET
-%   poe_ac/gpoe_ac/...          : IP-AC  + online learning ET
-%   local                       : local GP + online learning ET
-%   exact                       : exact unknown dynamics, no online learning ET
+%   poe/gpoe/moe/bcm/rbcm       : IP-DAC + always-online data update
+%   poe_ac/gpoe_ac/...          : IP-AC  + always-online data update
+%   local                       : local GP + always-online data update
+%   exact                       : exact unknown dynamics, no GP learning
 
 if nargin < 4
     use_formation = true;
@@ -133,11 +134,10 @@ ac_methods  = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};
 
 mode_lower = lower(CurrentMode);
 
-if strcmpi(mode_lower, 'offline')
-    OfflineDataQuantity_set = MaxDataQuantity_set;
-else
-    OfflineDataQuantity_set = 200 * ones(AgentQuantity, 1);
-end
+% Current advisor-requested online-learning setting:
+% start from zero offline samples, then add online data during the closed-loop simulation.
+% This makes the comparison focus on online learning instead of offline pretraining.
+OfflineDataQuantity_set = zeros(AgentQuantity, 1);
 
 LocalGP_set = cell(LocalGP_Quantity, 1);
 
@@ -149,67 +149,24 @@ for LocalGP_Nr = 1:LocalGP_Quantity
     LocalGP_set{LocalGP_Nr} = LocalGP_MultiOutput( ...
         x_dim, y_dim, MaxDataQuantity, SigmaN, SigmaF, SigmaL);
 
-    X_in = 2*(rand(x_dim, OfflineDataQuantity)-0.5)*DomainScale;
-    Y_in = Manipulator_2D_2DoF_UnknownDynamics(X_in);
-    Y_in = Y_in + SigmaN * randn(size(Y_in));
+    if OfflineDataQuantity > 0
+        X_in = 2*(rand(x_dim, OfflineDataQuantity)-0.5)*DomainScale;
+        Y_in = Manipulator_2D_2DoF_UnknownDynamics(X_in);
+        Y_in = Y_in + SigmaN * randn(size(Y_in));
 
-    LocalGP_set{LocalGP_Nr}.add_Alldata(X_in, Y_in);
+        LocalGP_set{LocalGP_Nr}.add_Alldata(X_in, Y_in);
+    end
     LocalGP_set{LocalGP_Nr}.tau   = GP_tau;
     LocalGP_set{LocalGP_Nr}.delta = GP_delta;
     LocalGP_set{LocalGP_Nr}.xMax  = X_max;
     LocalGP_set{LocalGP_Nr}.xMin  = X_min;
 end
 
-%% 7. Bidirectional Neighbour Set & Sigma_update for Online Learning ET
-Bidirection_NeighbourSet = cell(AgentQuantity, 1);
-Sigma_update_aggregation_set = nan(AgentQuantity, 1);
-
-for AgentNr = 1:AgentQuantity
-    AgentNeighbourSet = MultiAgentSystem.Agent_Topology.NeighbourSet{AgentNr};
-
-    for NeighbourNr = numel(AgentNeighbourSet):-1:1
-        NeighbourAgentNr = AgentNeighbourSet(NeighbourNr);
-
-        if isempty(find(MultiAgentSystem.Agent_Topology.NeighbourSet{NeighbourAgentNr} == AgentNr, 1))
-            AgentNeighbourSet(NeighbourNr) = [];
-        end
-    end
-
-    Bidirection_NeighbourSet{AgentNr} = AgentNeighbourSet;
-
-    Sigma_update_set = nan(numel(AgentNeighbourSet)+1, 1);
-
-    % Self after online update: approximated by observation noise SigmaN.
-    Sigma_update_set(1) = LocalGP_set{AgentNr}.SigmaN;
-
-    % Neighbours are not necessarily updated: conservative prior bound SigmaF.
-    for k = 1:numel(AgentNeighbourSet)
-        NeighbourAgentNr = AgentNeighbourSet(k);
-        Sigma_update_set(k+1) = LocalGP_set{NeighbourAgentNr}.SigmaF;
-    end
-
-    % POE-style precision aggregation for conservative update uncertainty bound.
-    Sigma_update_aggregation_set(AgentNr) = ...
-        sqrt(1 / (sum(Sigma_update_set.^(-2)) / numel(Sigma_update_set)));
-end
-
-%% 8. Online Learning ET Parameters
-beta = 0;
-gamma = 0.0005;
-
-for LocalGP_Nr = 1:LocalGP_Quantity
-    [~,~,~,beta_i,~,~] = LocalGP_set{LocalGP_Nr}.predict(zeros(x_dim,1));
-    beta = max(beta, beta_i);
-end
-
-eta_underline_set = sqrt(beta) * Sigma_update_aggregation_set + gamma;
-
-vartheta_bar = xi * chi * norm( ...
-    (eye(AgentQuantity) - diag(B)) * ones(AgentQuantity,1) * Fl ...
-    + eta_underline_set);
-
-% Online data-triggered learning is shared by Local, AC and DAC.
-online_learning_modes = [dac_methods, ac_methods, {'local', 'offline'}];
+%% 7. Online Data Update Setting
+% Advisor-requested setting: no online trigger.
+% Every GP-based mode adds the current sample at every time step.
+% Therefore eta-bound computation and DistributedET are not used in this version.
+online_learning_modes = [dac_methods, ac_methods, {'local'}];
 
 %% 9. Inducing Points & Aggregation Init
 Kappa_P = 1;
@@ -237,7 +194,16 @@ neighbor_count_per_agent = sum(L_lap < 0, 2);
 % AC state variables.
 Xi_ac = [];
 Xi_last_trigger_ac = [];
-ac_total_trigger_count = zeros(AgentQuantity, 1);
+
+% AC communication statistics are separated into two levels:
+%   1) broadcast count: one communication event per agent and time step
+%      if at least one inducing point triggers;
+%   2) point count: point-wise trigger events for fair comparison with DAC.
+ac_total_broadcast_count = zeros(AgentQuantity, 1);
+ac_total_point_count     = zeros(AgentQuantity, NumInducingPoints);
+
+% Backward-compatible alias used by some batch scripts.
+ac_total_trigger_count = ac_total_broadcast_count;
 
 if ismember(mode_lower, dac_methods)
     base_method = mode_lower;
@@ -266,7 +232,7 @@ elseif ismember(mode_lower, ac_methods)
     Xi_ac = P_inducing;
     Xi_last_trigger_ac = P_inducing;
 
-    [MaskedGP, Xi_ac, Xi_last_trigger_ac, ~] = ...
+    [MaskedGP, Xi_ac, Xi_last_trigger_ac, ~, ~] = ...
         gp_masked_aggregation_ac_et_update( ...
         Xi_ac, Xi_last_trigger_ac, L_lap, Kappa_P, AgentQuantity, ...
         NumInducingPoints, 0, InducingPoints_Coordinates, ...
@@ -292,22 +258,17 @@ vartheta_all_set(:,1) = x_all - s_all_set(:,1) - ...
     kron(ones(AgentQuantity,1), xl_set(:,1));
 
 f_hat_matrix  = zeros(y_dim, AgentQuantity);
-f_true_matrix = zeros(y_dim, AgentQuantity);
+f_true_matrix = zeros(y_diResultm, AgentQuantity);
 
 TrackingError_vector = zeros(1, T);
 
 f_hat_all_set  = nan(y_dim, AgentQuantity, T);
 f_true_all_set = nan(y_dim, AgentQuantity, T);
 
-% Online learning ET variables.
+% Online data update logging variables.
 online_trigger_set = zeros(AgentQuantity, T);
-online_trigger_count = zeros(AgentQuantity, 1);
-
-% GP aggregation temporary variables.
-mu_cell = cell(AgentQuantity, AgentQuantity);
-var_matrix = nan(AgentQuantity, AgentQuantity);
-eta_matrix = nan(AgentQuantity, AgentQuantity);
-eta_aggregated_vector = nan(AgentQuantity, 1);
+online_broadcast_trigger_count = zeros(AgentQuantity, 1);
+point_trigger_count     = zeros(AgentQuantity, NumInducingPoints);
 
 %% 11. Control Loop
 opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);
@@ -379,71 +340,30 @@ for t_Nr = 1:T-1
     vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
         kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
 
-    %% 11.5 Online Learning ET: data update layer
-    % This trigger is independent of AC/DAC consensus layer.
+    %% 11.5 Online data update layer: always add one sample per agent
+    % No online event trigger is used in this version.
+    % Every GP-based agent adds the current sample (x_i, y_i) to its LocalGP at every step.
     any_online_update = false;
     updated_agents = [];
 
     if ismember(mode_lower, online_learning_modes)
-        % Step A: compute current aggregated eta for each agent.
+        online_trigger_set(:, t_Nr) = 1;   % kept as a data-update indicator for logging
+
         for AgentNr = 1:AgentQuantity
             x_i = x_all_matrix(:, AgentNr);
 
-            [mu_cell{AgentNr,AgentNr}, var_matrix(AgentNr,AgentNr), ...
-             eta_matrix(AgentNr,AgentNr)] = ...
-                Manipulator_2D_2DoF_LocalPrediction( ...
-                x_i, AgentNr, LocalGP_set, beta, gamma, y_dim);
+            y_i = Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
+                  LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
 
-            AgentBidirection_NeighbourSet = Bidirection_NeighbourSet{AgentNr};
-
-            for k = 1:numel(AgentBidirection_NeighbourSet)
-                NeighbourAgentNr = AgentBidirection_NeighbourSet(k);
-
-                [mu_cell{AgentNr,NeighbourAgentNr}, ...
-                 var_matrix(AgentNr,NeighbourAgentNr), ...
-                 eta_matrix(AgentNr,NeighbourAgentNr)] = ...
-                    Manipulator_2D_2DoF_LocalPrediction( ...
-                    x_i, NeighbourAgentNr, LocalGP_set, beta, gamma, y_dim);
+            if LocalGP_set{AgentNr}.DataQuantity >= LocalGP_set{AgentNr}.MaxDataQuantity
+                LocalGP_set{AgentNr}.downdateParam(1);
             end
 
-            var_row_vector = var_matrix(AgentNr, :);
-            mu_row_cell = mu_cell(AgentNr, :);
+            LocalGP_set{AgentNr}.addPoint(x_i, y_i);
 
-            [~, eta_aggregated_i] = ...
-                ET_MAS_GP_Leader_GPAggregation_SingleAgent( ...
-                AgentNr, AgentBidirection_NeighbourSet, ...
-                var_row_vector, mu_row_cell, beta, gamma);
-
-            eta_aggregated_vector(AgentNr) = eta_aggregated_i;
-        end
-
-        % Step B: decide online data trigger.
-        for AgentNr = 1:AgentQuantity
-            online_trigger_set(AgentNr, t_Nr) = ...
-                Manipulator_2D_2DoF_DistributedET( ...
-                AgentNr, r_matrix, e_cell, ...
-                eta_underline_set, eta_aggregated_vector, ...
-                MultiAgentSystem, Fl, xi, chi, vartheta_bar);
-        end
-
-        % Step C: add data if triggered.
-        for AgentNr = 1:AgentQuantity
-            if online_trigger_set(AgentNr, t_Nr) == 1
-                x_i = x_all_matrix(:, AgentNr);
-
-                y_i = Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
-                      LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
-
-                if LocalGP_set{AgentNr}.DataQuantity >= LocalGP_set{AgentNr}.MaxDataQuantity
-                    LocalGP_set{AgentNr}.downdateParam(1);
-                end
-
-                LocalGP_set{AgentNr}.addPoint(x_i, y_i);
-
-                online_trigger_count(AgentNr) = online_trigger_count(AgentNr) + 1;
-                any_online_update = true;
-                updated_agents = [updated_agents; AgentNr]; 
-            end
+            online_trigger_count(AgentNr) = online_trigger_count(AgentNr) + 1;
+            any_online_update = true;
+            updated_agents = [updated_agents; AgentNr]; %#ok<AGROW>
         end
     end
 
@@ -451,11 +371,11 @@ for t_Nr = 1:T-1
     if ismember(mode_lower, dac_methods)
         % If online learning updated LocalGP, refresh only changed agents in P_inducing.
         if any_online_update
-            for kk = 1:numel(updated_agents)
-                AgentNr = updated_agents(kk);
+            for updatedAgentIdx = 1:numel(updated_agents)
+                UpdatedAgentNr = updated_agents(updatedAgentIdx);
 
                 P_inducing = recompute_P_single_agent( ...
-                    P_inducing, AgentNr, LocalGP_set, ...
+                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
                     NumInducingPoints, InducingPoints_Coordinates, ...
                     AgentQuantity, base_method);
             end
@@ -478,32 +398,43 @@ for t_Nr = 1:T-1
     elseif ismember(mode_lower, ac_methods)
         % AC consensus ET: static average consensus layer, dataset-style.
         % Static AC assumes a fixed input Pi. If online data changes Pi,
-        % reset the AC state to the updated Pi to keep the static-consensus target consistent.
+        % refresh the current AC state Xi_ac with the new P_inducing.
+        % The last transmitted state Xi_last_trigger_ac is NOT refreshed for free.
         if any_online_update
-            for kk = 1:numel(updated_agents)
-                AgentNr = updated_agents(kk);
+            for updatedAgentIdx = 1:numel(updated_agents)
+                UpdatedAgentNr = updated_agents(updatedAgentIdx);
 
                 P_inducing = recompute_P_single_agent( ...
-                    P_inducing, AgentNr, LocalGP_set, ...
+                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
                     NumInducingPoints, InducingPoints_Coordinates, ...
                     AgentQuantity, base_method);
             end
 
             Xi_ac = P_inducing;
-            Xi_last_trigger_ac = P_inducing;
+            % Do NOT reset Xi_last_trigger_ac here.
+            % Xi_last_trigger_ac stores the last actually transmitted AC state
+            % and should only be updated when the AC communication trigger fires.
         end
 
-        [MaskedGP, Xi_ac, Xi_last_trigger_ac, ac_step_triggers] = ...
+        [MaskedGP, Xi_ac, Xi_last_trigger_ac, ...
+         ac_step_broadcast_triggers, ac_step_point_triggers] = ...
             gp_masked_aggregation_ac_et_update( ...
             Xi_ac, Xi_last_trigger_ac, L_lap, Kappa_P, AgentQuantity, ...
             NumInducingPoints, t_step, InducingPoints_Coordinates, ...
             SigmaF, SigmaL, x_dim, base_method, p_dim, ...
             N_degree, a_param, sigma_i_ac);
 
-        ac_total_trigger_count = ac_total_trigger_count + ac_step_triggers;
+        ac_total_broadcast_count = ...
+            ac_total_broadcast_count + ac_step_broadcast_triggers;
+
+        ac_total_point_count = ...
+            ac_total_point_count + ac_step_point_triggers;
+
+        % Backward-compatible alias: old scripts interpret this as AC / agent.
+        ac_total_trigger_count = ac_total_broadcast_count;
     end
 
-     fprintf('t = %6.4f\n', t);  
+    % fprintf('t = %6.4f\n', t);
 end
 
 TrackingError_vector(end) = norm(vartheta_all_set(:,end));
@@ -527,11 +458,8 @@ fprintf('Formation: %d\n', use_formation);
 fprintf('Total simulation time: %.2f s\n', elapsed_time);
 fprintf('Final tracking error: %.6f\n', TrackingError_vector(end));
 
-fprintf('\nOnline learning ET:\n');
-fprintf('  Total triggers: %d\n', sum(online_trigger_count));
-fprintf('  Average triggers: %.2f / agent\n', mean(online_trigger_count));
-
 dac_trigger_count_per_agent_point = 0;
+ac_trigger_count_per_agent        = 0;
 ac_trigger_count_per_agent_point  = 0;
 
 if ismember(lower(CurrentMode), dac_methods)
@@ -545,11 +473,15 @@ if ismember(lower(CurrentMode), dac_methods)
 
 elseif ismember(lower(CurrentMode), ac_methods)
 
+    ac_trigger_count_per_agent = mean(ac_total_broadcast_count);
+
     ac_trigger_count_per_agent_point = ...
-        mean(ac_total_trigger_count);
+        mean(sum(ac_total_point_count, 2)) / NumInducingPoints;
 
     fprintf('\nAC consensus ET:\n');
-    fprintf('  Average triggers: %.4f / agent\n', ...
+    fprintf('  Broadcast triggers: %.2f / agent\n', ...
+        ac_trigger_count_per_agent);
+    fprintf('  Point triggers: %.4f / agent / inducing point\n', ...
         ac_trigger_count_per_agent_point);
 end
 
@@ -573,12 +505,14 @@ if nargin >= 3
         'dac_total_trigger_count', ...
         'dac_trigger_count_per_agent_point', ...
         'ac_total_trigger_count', ...
+        'ac_total_broadcast_count', ...
+        'ac_total_point_count', ...
+        'ac_trigger_count_per_agent', ...
         'ac_trigger_count_per_agent_point', ...
         'NumInducingPoints', ...
         'Kappa_P', ...
-        'eta_underline_set', ...
-        'vartheta_bar', ...
-        'elapsed_time');
+        'elapsed_time', ...
+        'OfflineDataQuantity_set');
 end
 
 end
@@ -586,14 +520,15 @@ end
 %% ========================================================================
 %  Local helper: dataset-style IP-AC consensus ET update
 %  ========================================================================
-function [MaskedGP, Xi, Xi_last_trigger, trigger_count] = gp_masked_aggregation_ac_et_update( ...
+function [MaskedGP, Xi, Xi_last_trigger, broadcast_trigger_count, point_trigger_count] = gp_masked_aggregation_ac_et_update( ...
     Xi, Xi_last_trigger, L, Kappa_P, AgentQuantity, NumInducingPoints, TimeStep, ...
     InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, method, p_dim, ...
     N_degree, a_param, sigma_i_ac)
 
 M = NumInducingPoints;
 y_dim = 2;
-trigger_count = zeros(AgentQuantity, 1);
+broadcast_trigger_count = zeros(AgentQuantity, 1);
+point_trigger_count     = zeros(AgentQuantity, NumInducingPoints);
 
 if TimeStep > 0
     L_Xi_hat = laplacian_multiply_agent_dim_local(Xi_last_trigger, L);
@@ -619,7 +554,12 @@ if TimeStep > 0
 
         if any(trigger_idx)
             Xi_last_trigger(:,agent_i,trigger_idx) = Xi(:,agent_i,trigger_idx);
-            trigger_count(agent_i) = sum(trigger_idx);
+
+            % One broadcast event for this agent at this time step.
+            broadcast_trigger_count(agent_i) = 1;
+
+            % Point-wise record, useful for DAC-like normalized statistics.
+            point_trigger_count(agent_i,trigger_idx) = 1;
         end
     end
 end
@@ -677,9 +617,7 @@ end
 %% ========================================================================
 %  Local helper: apply graph Laplacian along agent dimension
 %  ========================================================================
-function L_X = laplacian_multiply_age
-
-nt_dim_local(X, L)
+function L_X = laplacian_multiply_agent_dim_local(X, L)
 [p_dim, agent_quantity, num_points] = size(X);
 X_agent_first = permute(X, [2, 1, 3]);
 X_flat = reshape(X_agent_first, agent_quantity, []);

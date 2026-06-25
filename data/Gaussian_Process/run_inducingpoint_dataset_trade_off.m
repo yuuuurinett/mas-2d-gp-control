@@ -210,10 +210,20 @@ t_ip_inducing_prediction = toc(tic_inducing_prediction);
 fprintf('预计算完成: %.2fs\n', t_ip_inducing_prediction);
 
 
-ProjectRoot = fileparts(mfilename('fullpath'));
-SaveFolder = fullfile(ProjectRoot, 'Result','Dataset',DatasetName);
-if ~exist(SaveFolder,'dir'), mkdir(SaveFolder); end
-tr_tag = round(train_ratio*100);
+MainFuncPath = which('run_inducingpoint_dataset_trade_off');
+if isempty(MainFuncPath)
+    MainFuncPath = mfilename('fullpath');
+end
+ProjectRoot = fileparts(MainFuncPath);
+
+SaveFolder = fullfile(ProjectRoot, 'Result', 'Dataset', DatasetName);
+fprintf('[Save folder]\n%s\n', SaveFolder);
+
+if ~exist(SaveFolder, 'dir')
+    mkdir(SaveFolder);
+end
+
+tr_tag = round(train_ratio * 100);
 
 %% 7. 主循环
 for mi = 1:numel(AllModes)
@@ -405,6 +415,44 @@ for mi = 1:numel(AllModes)
         Xi_final = Xi;
     end
 
+    %% Consensus quality check
+    % Check whether event-triggered DAC/AC consensus has converged sufficiently.
+    % Xi_final should be close to the average reference statistics over agents.
+    % Size convention:
+    %   Xi_final      : [p_dim x AgentQuantity x NumInducingPoints]
+    %   Consensus_ref : [p_dim x 1             x NumInducingPoints]
+    Consensus_ref = mean(Pi, 2);
+
+    Consensus_abs_err_tensor = abs(Xi_final - Consensus_ref);
+    Consensus_max_abs_err    = max(Consensus_abs_err_tensor(:));
+    Consensus_mean_abs_err   = mean(Consensus_abs_err_tensor(:), 'omitnan');
+    Consensus_median_abs_err = median(Consensus_abs_err_tensor(:), 'omitnan');
+
+    Consensus_ref_denom = max(abs(Consensus_ref), 1e-10);
+    Consensus_rel_err_tensor = Consensus_abs_err_tensor ./ Consensus_ref_denom;
+    Consensus_max_rel    = max(Consensus_rel_err_tensor(:));
+    Consensus_mean_rel   = mean(Consensus_rel_err_tensor(:), 'omitnan');
+    Consensus_median_rel = median(Consensus_rel_err_tensor(:), 'omitnan');
+
+    % phi is extracted from agent 1 in the original implementation.
+    agent_used_for_phi = 1;
+    Xi_used_for_phi = Xi_final(:, agent_used_for_phi, :);
+    UsedAgent_abs_err_tensor = abs(Xi_used_for_phi - Consensus_ref);
+    UsedAgent_max_abs_err  = max(UsedAgent_abs_err_tensor(:));
+    UsedAgent_mean_abs_err = mean(UsedAgent_abs_err_tensor(:), 'omitnan');
+
+    fprintf('\n[Consensus check]\n');
+    fprintf('target: mean(Pi, agents)\n');
+    fprintf('max    |Xi_final - mean(Pi)| = %.4e\n', Consensus_max_abs_err);
+    fprintf('mean   |Xi_final - mean(Pi)| = %.4e\n', Consensus_mean_abs_err);
+    fprintf('median |Xi_final - mean(Pi)| = %.4e\n', Consensus_median_abs_err);
+    fprintf('max relative consensus error    = %.4e\n', Consensus_max_rel);
+    fprintf('mean relative consensus error   = %.4e\n', Consensus_mean_rel);
+    fprintf('median relative consensus error = %.4e\n', Consensus_median_rel);
+    fprintf('agent used for phi = %d\n', agent_used_for_phi);
+    fprintf('max  |Xi_agent%d - mean(Pi)| = %.4e\n', agent_used_for_phi, UsedAgent_max_abs_err);
+    fprintf('mean |Xi_agent%d - mean(Pi)| = %.4e\n', agent_used_for_phi, UsedAgent_mean_abs_err);
+
     %% 提取phi
     phi = zeros(y_dim,NumInducingPoints);
     for d = 1:y_dim
@@ -529,12 +577,33 @@ if debug_check_normalization
 end
 
     err = Y_eval - mu_pred;
+
+    % SMSE denominator protection. This is not the GP predictive variance;
+    % it is only the empirical output variance used for normalization.
     Y_var_base_safe = max(Y_var_base, 1e-10);
+
     smse = mean(mean(err.^2) ./ Y_var_base_safe);
     rmse = mean(sqrt(mean(err.^2)));
 
     if compute_variance
-        nlpd = mean(mean(0.5*(log(2*pi*var_pred) + err.^2 ./ var_pred)));
+        % Use the original GP predictive variance for evaluation.
+        % Apply a numerical floor ONLY for NLPD/MSLL calculation.
+        % var_pred itself is not modified.
+        nlpd_floor_normalized = 1e-6;
+        nlpd_floor = nlpd_floor_normalized * max(mean(Y_std.^2), 1e-10);
+
+        var_pred_for_nlpd = var_pred;
+        invalid_var_mask = (~isfinite(var_pred_for_nlpd)) | (var_pred_for_nlpd <= 0);
+        if any(invalid_var_mask(:))
+            warning('var_pred contains non-positive or non-finite values. Flooring them only for NLPD/MSLL.');
+        end
+
+        var_pred_for_nlpd = max(var_pred_for_nlpd, nlpd_floor);
+
+        fprintf('[NLPD floor] floor = %.4e, ratio affected = %.4f%%\n', ...
+            nlpd_floor, 100 * mean(var_pred(:) < nlpd_floor));
+
+        nlpd = mean(mean(0.5*(log(2*pi*var_pred_for_nlpd) + err.^2 ./ var_pred_for_nlpd)));
 
         Y_train_var_safe = max(Y_std.^2, 1e-10);   % [1 x y_dim], numerical safety
         err_trivial = Y_eval - Y_mean;             % implicit expansion: [N_eval x y_dim]
@@ -545,6 +614,46 @@ end
     else
         nlpd = NaN;
         msll = NaN;
+    end
+
+    %% Method-level MSLL diagnosis
+    if compute_variance
+        Mean_var_pred = mean(var_pred(:), 'omitnan');
+        Median_var_pred = median(var_pred(:), 'omitnan');
+        Min_var_pred = min(var_pred(:));
+        Max_var_pred = max(var_pred(:));
+
+        small_var_threshold = 1e-6;
+        small_var_ratio = mean(var_pred(:) < small_var_threshold);
+        ratio_vec_raw = err(:).^2 ./ max(var_pred(:), realmin);
+
+        fprintf('ratio var_pred < %.1e    = %.4f%%\n', ...
+            small_var_threshold, 100 * small_var_ratio);
+        fprintf('max(err.^2 ./ var)       = %.4e\n', max(ratio_vec_raw));
+        fprintf('p95(err.^2 ./ var)       = %.4e\n', prctile(ratio_vec_raw, 95));
+        fprintf('p99(err.^2 ./ var)       = %.4e\n', prctile(ratio_vec_raw, 99));
+
+        Mean_err2 = mean(err(:).^2, 'omitnan');
+        Median_err2 = median(err(:).^2, 'omitnan');
+
+        Mean_err2_over_var = mean(err(:).^2 ./ var_pred_for_nlpd(:), 'omitnan');
+        Median_err2_over_var = median(err(:).^2 ./ var_pred_for_nlpd(:), 'omitnan');
+
+        fprintf('\n[Method diagnosis]\n');
+        fprintf('Dataset=%s | Method=%s | M=%d | seed=%d\n', ...
+            DatasetName, cur, NumInducingPoints, seed);
+        fprintf('mean(var_pred)          = %.4e\n', Mean_var_pred);
+        fprintf('median(var_pred)        = %.4e\n', Median_var_pred);
+        fprintf('min(var_pred)           = %.4e\n', Min_var_pred);
+        fprintf('max(var_pred)           = %.4e\n', Max_var_pred);
+        fprintf('mean(err.^2)            = %.4e\n', Mean_err2);
+        fprintf('median(err.^2)          = %.4e\n', Median_err2);
+        fprintf('mean(err.^2 ./ var)     = %.4e\n', Mean_err2_over_var);
+        fprintf('median(err.^2 ./ var)   = %.4e\n', Median_err2_over_var);
+    else
+        Mean_var_pred = NaN; Median_var_pred = NaN; Min_var_pred = NaN; Max_var_pred = NaN;
+        Mean_err2 = mean(err(:).^2, 'omitnan'); Median_err2 = median(err(:).^2, 'omitnan');
+        Mean_err2_over_var = NaN; Median_err2_over_var = NaN;
     end
 
     t_train_per_point = (t_train/N_train) * 1000;
@@ -575,7 +684,10 @@ end
     rmse_curve = sqrt(cumsum(err_sq_mean) ./ (1:N_eval)');
     event_count_mean = comm_train;
 
-    save(fullfile(SaveFolder, sprintf('%s_M%d_tr%d_mc%d.mat', current_method, NumInducingPoints, tr_tag, seed)), ...
+    outFile = fullfile(SaveFolder, sprintf('%s_M%d_tr%d_mc%d.mat', ...
+        current_method, NumInducingPoints, tr_tag, seed));
+
+    save(outFile, ...
         'smse', 'rmse', 'nlpd', 'msll', ...
         't_train_total', 't_test_total', ...
         't_train_per_point', 't_test_per_point', ...
@@ -589,11 +701,18 @@ end
         'current_method', 'seed', 'train_ratio', 'NumInducingPoints', 'N_train', 'N_eval', ...
         'smse_curve', 'rmse_curve', ...
         'trigger_count_per_agent', 'trigger_per_agent_point', ...
+        'Mean_var_pred', 'Median_var_pred', 'Min_var_pred', 'Max_var_pred', ...
+        'Mean_err2', 'Median_err2', 'Mean_err2_over_var', 'Median_err2_over_var', ...
+        'Consensus_max_abs_err', 'Consensus_mean_abs_err', 'Consensus_median_abs_err', ...
+        'Consensus_max_rel', 'Consensus_mean_rel', 'Consensus_median_rel', ...
+        'UsedAgent_max_abs_err', 'UsedAgent_mean_abs_err', 'agent_used_for_phi', ...
         'conv_curve_dac', 'conv_curve_ac', ...
         'conv_dac_tracking_curve', 'conv_dac_disagreement_curve', ...
         'conv_ac_avg_error_curve', 'conv_ac_disagreement_curve', ...
         'dac_state_hist', 'dac_ref_hist', ...
         'ac_state_hist', 'ac_ref_hist');
+
+    fprintf('[Saved result]\n%s\n', outFile);
 end
 end
 
