@@ -208,9 +208,11 @@ ac_total_trigger_count = ac_total_broadcast_count;
 if ismember(mode_lower, dac_methods)
     base_method = mode_lower;
 
+    warning_state_gp_init = warning('off','all');
     [P_inducing, p_dim] = gp_masked_aggregation_init( ...
         LocalGP_set, AgentQuantity, NumInducingPoints, ...
         InducingPoints_Coordinates, base_method);
+    warning(warning_state_gp_init);
 
     Zeta_vector_inducing = zeros(p_dim, AgentQuantity, NumInducingPoints);
     Zeta_last_trigger = P_inducing;
@@ -225,9 +227,11 @@ if ismember(mode_lower, dac_methods)
 elseif ismember(mode_lower, ac_methods)
     base_method = strrep(mode_lower, '_ac', '');
 
+    warning_state_gp_init = warning('off','all');
     [P_inducing, p_dim] = gp_masked_aggregation_init( ...
         LocalGP_set, AgentQuantity, NumInducingPoints, ...
         InducingPoints_Coordinates, base_method);
+    warning(warning_state_gp_init);
 
     Xi_ac = P_inducing;
     Xi_last_trigger_ac = P_inducing;
@@ -258,7 +262,7 @@ vartheta_all_set(:,1) = x_all - s_all_set(:,1) - ...
     kron(ones(AgentQuantity,1), xl_set(:,1));
 
 f_hat_matrix  = zeros(y_dim, AgentQuantity);
-f_true_matrix = zeros(y_diResultm, AgentQuantity);
+f_true_matrix = zeros(y_dim, AgentQuantity);
 
 TrackingError_vector = zeros(1, T);
 
@@ -266,9 +270,10 @@ f_hat_all_set  = nan(y_dim, AgentQuantity, T);
 f_true_all_set = nan(y_dim, AgentQuantity, T);
 
 % Online data update logging variables.
-online_trigger_set = zeros(AgentQuantity, T);
-online_broadcast_trigger_count = zeros(AgentQuantity, 1);
-point_trigger_count     = zeros(AgentQuantity, NumInducingPoints);
+% Since online data update is performed at every step, these variables are
+% kept only as sanity-check logs and are not printed as trigger statistics.
+online_update_set   = zeros(AgentQuantity, T);
+online_update_count = zeros(AgentQuantity, 1);
 
 %% 11. Control Loop
 opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);
@@ -347,7 +352,7 @@ for t_Nr = 1:T-1
     updated_agents = [];
 
     if ismember(mode_lower, online_learning_modes)
-        online_trigger_set(:, t_Nr) = 1;   % kept as a data-update indicator for logging
+        online_update_set(:, t_Nr) = 1;   % kept as a data-update indicator for logging
 
         for AgentNr = 1:AgentQuantity
             x_i = x_all_matrix(:, AgentNr);
@@ -361,7 +366,7 @@ for t_Nr = 1:T-1
 
             LocalGP_set{AgentNr}.addPoint(x_i, y_i);
 
-            online_trigger_count(AgentNr) = online_trigger_count(AgentNr) + 1;
+            online_update_count(AgentNr) = online_update_count(AgentNr) + 1;
             any_online_update = true;
             updated_agents = [updated_agents; AgentNr]; %#ok<AGROW>
         end
@@ -500,8 +505,8 @@ if nargin >= 3
         'f_hat_all_set', ...
         'f_true_all_set', ...
         'vartheta_all_set', ...
-        'online_trigger_set', ...
-        'online_trigger_count', ...
+        'online_update_set', ...
+        'online_update_count', ...
         'dac_total_trigger_count', ...
         'dac_trigger_count_per_agent_point', ...
         'ac_total_trigger_count', ...
@@ -528,7 +533,7 @@ function [MaskedGP, Xi, Xi_last_trigger, broadcast_trigger_count, point_trigger_
 M = NumInducingPoints;
 y_dim = 2;
 broadcast_trigger_count = zeros(AgentQuantity, 1);
-point_trigger_count     = zeros(AgentQuantity, NumInducingPoints);
+point_trigger_count     = zeros(AgentQuantity, M);
 
 if TimeStep > 0
     L_Xi_hat = laplacian_multiply_agent_dim_local(Xi_last_trigger, L);

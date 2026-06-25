@@ -441,17 +441,7 @@ for mi = 1:numel(AllModes)
     UsedAgent_max_abs_err  = max(UsedAgent_abs_err_tensor(:));
     UsedAgent_mean_abs_err = mean(UsedAgent_abs_err_tensor(:), 'omitnan');
 
-    fprintf('\n[Consensus check]\n');
-    fprintf('target: mean(Pi, agents)\n');
-    fprintf('max    |Xi_final - mean(Pi)| = %.4e\n', Consensus_max_abs_err);
-    fprintf('mean   |Xi_final - mean(Pi)| = %.4e\n', Consensus_mean_abs_err);
-    fprintf('median |Xi_final - mean(Pi)| = %.4e\n', Consensus_median_abs_err);
-    fprintf('max relative consensus error    = %.4e\n', Consensus_max_rel);
-    fprintf('mean relative consensus error   = %.4e\n', Consensus_mean_rel);
-    fprintf('median relative consensus error = %.4e\n', Consensus_median_rel);
-    fprintf('agent used for phi = %d\n', agent_used_for_phi);
-    fprintf('max  |Xi_agent%d - mean(Pi)| = %.4e\n', agent_used_for_phi, UsedAgent_max_abs_err);
-    fprintf('mean |Xi_agent%d - mean(Pi)| = %.4e\n', agent_used_for_phi, UsedAgent_mean_abs_err);
+    % Consensus diagnostic variables are computed and saved, but verbose prints are disabled.
 
     %% 提取phi
     phi = zeros(y_dim,NumInducingPoints);
@@ -496,18 +486,29 @@ for mi = 1:numel(AllModes)
     t_ip_test_mean = toc(tic_mean);
 
     if compute_variance
-    tic_variance = tic;
+        tic_variance = tic;
 
-    V_matrix = Cholesky_L \ K_star;
-    var_normalized = SigmaF^2 - sum(V_matrix.^2, 1)';
+        V_matrix = Cholesky_L \ K_star;
 
-    % MATLAB implicit expansion:
-    % var_normalized: [N_eval x 1]
-    % Y_std.^2      : [1 x y_dim]
-    var_pred = var_normalized .* (Y_std.^2);
+        % Raw latent GP predictive variance in normalized output scale.
+        % This matches the original GP formula: k(x*,x*) - v'v.
+        var_normalized_raw = SigmaF^2 - sum(V_matrix.^2, 1)';
 
-    t_ip_test_variance = toc(tic_variance);
+        % Stable evaluation convention used in the previous implementation:
+        % do not allow the predictive variance to fall below SigmaN^2.
+        % This avoids near-zero variance dominating NLPD/MSLL.
+        var_normalized = max(var_normalized_raw, SigmaN^2);
+
+        % De-normalize variance to the original output scale.
+        % MATLAB implicit expansion:
+        %   var_normalized : [N_eval x 1]
+        %   Y_std.^2       : [1 x y_dim]
+        var_pred = var_normalized .* (Y_std.^2);
+
+        t_ip_test_variance = toc(tic_variance);
     else
+        var_normalized_raw = NaN(N_eval, 1);
+        var_normalized = NaN(N_eval, 1);
         var_pred = NaN(N_eval, y_dim);
         t_ip_test_variance = 0;
     end
@@ -515,67 +516,6 @@ for mi = 1:numel(AllModes)
     t_test = toc(tic_test_total);
 
     %% Metrics
-    %% ================= Debug checks for de-normalization =================
-% This block checks whether mu_pred, var_pred, and the MSLL baseline
-% are all in the original output scale.
-
-debug_check_normalization = true;
-
-if debug_check_normalization
-
-    fprintf('\n========== Normalization / De-normalization Check ==========\n');
-
-    % ---- Check 1: output statistics ----
-    fprintf('Y_mean size:      %s\n', mat2str(size(Y_mean)));
-    fprintf('Y_std size:       %s\n', mat2str(size(Y_std)));
-    fprintf('Y_eval size:      %s\n', mat2str(size(Y_eval)));
-    fprintf('mu_pred size:     %s\n', mat2str(size(mu_pred)));
-    fprintf('var_pred size:    %s\n', mat2str(size(var_pred)));
-
-    fprintf('\nY_mean range:     [%.4g, %.4g]\n', min(Y_mean(:)), max(Y_mean(:)));
-    fprintf('Y_std range:      [%.4g, %.4g]\n', min(Y_std(:)), max(Y_std(:)));
-    fprintf('Y_eval range:     [%.4g, %.4g]\n', min(Y_eval(:)), max(Y_eval(:)));
-    fprintf('mu_pred range:    [%.4g, %.4g]\n', min(mu_pred(:)), max(mu_pred(:)));
-    fprintf('var_pred range:   [%.4g, %.4g]\n', min(var_pred(:)), max(var_pred(:)));
-
-    % ---- Check 2: variance must be positive ----
-    if any(var_pred(:) <= 0) || any(~isfinite(var_pred(:)))
-        warning('var_pred contains non-positive or non-finite values.');
-    else
-        fprintf('var_pred positivity check: OK\n');
-    end
-
-    % ---- Check 3: mu_pred and Y_eval should be in comparable scale ----
-    y_eval_std = std(Y_eval, 0, 1, 'omitnan');
-    mu_pred_std = std(mu_pred, 0, 1, 'omitnan');
-
-    fprintf('\nstd(Y_eval):      %s\n', mat2str(y_eval_std, 4));
-    fprintf('std(mu_pred):     %s\n', mat2str(mu_pred_std, 4));
-
-    ratio_mu_scale = mu_pred_std ./ max(y_eval_std, 1e-12);
-    fprintf('std(mu_pred) / std(Y_eval): %s\n', mat2str(ratio_mu_scale, 4));
-
-    if any(ratio_mu_scale < 0.05 | ratio_mu_scale > 20)
-        warning('mu_pred scale may be inconsistent with Y_eval.');
-    else
-        fprintf('mu_pred scale check: OK\n');
-    end
-
-    % ---- Check 4: baseline variance used in MSLL ----
-    Y_train_var_safe_debug = max(Y_std.^2, 1e-10);
-
-    fprintf('\nY_std.^2 range:   [%.4g, %.4g]\n', ...
-        min(Y_train_var_safe_debug(:)), max(Y_train_var_safe_debug(:)));
-
-    if any(Y_train_var_safe_debug(:) <= 0) || any(~isfinite(Y_train_var_safe_debug(:)))
-        warning('Baseline variance Y_std.^2 is invalid.');
-    else
-        fprintf('Baseline variance check: OK\n');
-    end
-
-    fprintf('============================================================\n\n');
-end
-
     err = Y_eval - mu_pred;
 
     % SMSE denominator protection. This is not the GP predictive variance;
@@ -586,28 +526,22 @@ end
     rmse = mean(sqrt(mean(err.^2)));
 
     if compute_variance
-        % Use the original GP predictive variance for evaluation.
-        % Apply a numerical floor ONLY for NLPD/MSLL calculation.
-        % var_pred itself is not modified.
-        nlpd_floor_normalized = 1e-6;
-        nlpd_floor = nlpd_floor_normalized * max(mean(Y_std.^2), 1e-10);
-
+        % Follow the PhD/original NLPD formula using the GP predictive variance.
+        % var_pred already includes the SigmaN^2 floor in normalized scale,
+        % matching the previous stable implementation.
         var_pred_for_nlpd = var_pred;
-        invalid_var_mask = (~isfinite(var_pred_for_nlpd)) | (var_pred_for_nlpd <= 0);
-        if any(invalid_var_mask(:))
-            warning('var_pred contains non-positive or non-finite values. Flooring them only for NLPD/MSLL.');
-        end
 
+        % Tiny numerical floor only for log/division safety.
+        nlpd_floor = 1e-10 * max(mean(Y_std.^2), 1e-10);
         var_pred_for_nlpd = max(var_pred_for_nlpd, nlpd_floor);
 
-        fprintf('[NLPD floor] floor = %.4e, ratio affected = %.4f%%\n', ...
-            nlpd_floor, 100 * mean(var_pred(:) < nlpd_floor));
+        nlpd = mean(mean(0.5 * (log(2*pi*var_pred_for_nlpd) + ...
+            err.^2 ./ var_pred_for_nlpd)));
 
-        nlpd = mean(mean(0.5*(log(2*pi*var_pred_for_nlpd) + err.^2 ./ var_pred_for_nlpd)));
-
-        Y_train_var_safe = max(Y_std.^2, 1e-10);   % [1 x y_dim], numerical safety
-        err_trivial = Y_eval - Y_mean;             % implicit expansion: [N_eval x y_dim]
-        nlpd_trivial = mean(mean(0.5*(log(2*pi*Y_train_var_safe) + ...
+        % Baseline NLPD for MSLL: constant Gaussian using training-output mean/variance.
+        Y_train_var_safe = max(Y_std.^2, 1e-10);
+        err_trivial = Y_eval - Y_mean;
+        nlpd_trivial = mean(mean(0.5 * (log(2*pi*Y_train_var_safe) + ...
             err_trivial.^2 ./ Y_train_var_safe)));
 
         msll = nlpd - nlpd_trivial;
@@ -616,40 +550,18 @@ end
         msll = NaN;
     end
 
-    %% Method-level MSLL diagnosis
+    %% Compact diagnostic variables saved for optional post-analysis
     if compute_variance
         Mean_var_pred = mean(var_pred(:), 'omitnan');
         Median_var_pred = median(var_pred(:), 'omitnan');
         Min_var_pred = min(var_pred(:));
         Max_var_pred = max(var_pred(:));
 
-        small_var_threshold = 1e-6;
-        small_var_ratio = mean(var_pred(:) < small_var_threshold);
-        ratio_vec_raw = err(:).^2 ./ max(var_pred(:), realmin);
-
-        fprintf('ratio var_pred < %.1e    = %.4f%%\n', ...
-            small_var_threshold, 100 * small_var_ratio);
-        fprintf('max(err.^2 ./ var)       = %.4e\n', max(ratio_vec_raw));
-        fprintf('p95(err.^2 ./ var)       = %.4e\n', prctile(ratio_vec_raw, 95));
-        fprintf('p99(err.^2 ./ var)       = %.4e\n', prctile(ratio_vec_raw, 99));
-
         Mean_err2 = mean(err(:).^2, 'omitnan');
         Median_err2 = median(err(:).^2, 'omitnan');
 
         Mean_err2_over_var = mean(err(:).^2 ./ var_pred_for_nlpd(:), 'omitnan');
         Median_err2_over_var = median(err(:).^2 ./ var_pred_for_nlpd(:), 'omitnan');
-
-        fprintf('\n[Method diagnosis]\n');
-        fprintf('Dataset=%s | Method=%s | M=%d | seed=%d\n', ...
-            DatasetName, cur, NumInducingPoints, seed);
-        fprintf('mean(var_pred)          = %.4e\n', Mean_var_pred);
-        fprintf('median(var_pred)        = %.4e\n', Median_var_pred);
-        fprintf('min(var_pred)           = %.4e\n', Min_var_pred);
-        fprintf('max(var_pred)           = %.4e\n', Max_var_pred);
-        fprintf('mean(err.^2)            = %.4e\n', Mean_err2);
-        fprintf('median(err.^2)          = %.4e\n', Median_err2);
-        fprintf('mean(err.^2 ./ var)     = %.4e\n', Mean_err2_over_var);
-        fprintf('median(err.^2 ./ var)   = %.4e\n', Median_err2_over_var);
     else
         Mean_var_pred = NaN; Median_var_pred = NaN; Min_var_pred = NaN; Max_var_pred = NaN;
         Mean_err2 = mean(err(:).^2, 'omitnan'); Median_err2 = median(err(:).^2, 'omitnan');
@@ -701,6 +613,7 @@ end
         'current_method', 'seed', 'train_ratio', 'NumInducingPoints', 'N_train', 'N_eval', ...
         'smse_curve', 'rmse_curve', ...
         'trigger_count_per_agent', 'trigger_per_agent_point', ...
+        'var_normalized_raw', 'var_normalized', ...
         'Mean_var_pred', 'Median_var_pred', 'Min_var_pred', 'Max_var_pred', ...
         'Mean_err2', 'Median_err2', 'Mean_err2_over_var', 'Median_err2_over_var', ...
         'Consensus_max_abs_err', 'Consensus_mean_abs_err', 'Consensus_median_abs_err', ...
