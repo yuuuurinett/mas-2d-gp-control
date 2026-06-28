@@ -1,15 +1,31 @@
-%% plot_inducingpoint_M_tradeoff.m
-% Paper-style M-ablation summary:
+%% plot_inducingpoint_M_tradeoff_clean_metric_first.m
+% Clean M-ablation plotting/report script.
+%
+% Purpose:
+%   Generate only Word-friendly figures and clean report tables.
+%
+% Setting:
 %   Fixed setting: IP-DAC / event-triggered consensus
 %   M = 100:100:2500
-%   Metrics: SMSE, MSLL, and train time
+%   Metrics: SMSE, MSLL, and training time
 %   Mean/std over Monte Carlo seeds
 %
-% Outputs:
-%   1) Full M-ablation summary CSV
-%   2) Low / Medium / High M tables
-%   3) Selected inducing-point number table
-%   4) Paper-style figures
+% Outputs are saved to:
+%   Result/Figures/M_ablation_clean_metric_first/
+%
+% Generated files:
+%   Figures:
+%     M_ablation_SMSE_only_M100_2500.png/pdf
+%     M_ablation_MSLL_only_M100_2500.png/pdf
+%     M_ablation_train_time_SMSE_only_M100_2500.png/pdf
+%     M_ablation_train_time_MSLL_only_M100_2500.png/pdf
+%
+%   Tables:
+%     M_ablation_summary_DAC_tr40.csv
+%     M_level_tradeoff_compact_avg_methods.csv
+%     M_level_tradeoff_metric_first.csv
+%     M_selected_inducing_points.csv
+%     M_ablation_report_tables_metric_first.md
 %
 % Notes:
 %   Low    = M=500
@@ -37,20 +53,18 @@ ProjectRoot = fileparts(mfilename('fullpath'));
 
 ResultRoot = fullfile(ProjectRoot, 'Result', 'Dataset');
 
-FigFolder = fullfile(ProjectRoot, 'Result', 'Figures', 'M_ablation_pretty');
+FigFolder = fullfile(ProjectRoot, 'Result', 'Figures', 'M_ablation_clean_metric_first');
 if ~exist(FigFolder, 'dir')
     mkdir(FigFolder);
 end
 
-show_errorbar = false;
-show_marker   = true;
+show_marker = true;
 
 % M is displayed in units of 10^3 on the x-axis.
 x_unit = 1000;
 
-% Overall and zoom ranges in original M units.
+% Overall range in original M units.
 overall_range = [100 2500];
-zoom_range    = [1000 2500];
 
 %% ===================== Plot style =====================
 
@@ -67,9 +81,6 @@ method_lines   = {'-','-','-','-','-'};
 
 line_width  = 1.35;
 marker_size = 4.2;
-
-marker_idx = 1:4:numel(M_list);
-err_idx    = 1:5:numel(M_list);
 
 %% ===================== Read data =====================
 
@@ -115,8 +126,8 @@ for ci = 1:numel(Method_list)
                 end
 
                 % Training time in ms/pt.
-                % New result files should contain t_train_per_point directly.
-                % For older result files, fall back to t_train_total / N_train.
+                % Current result files should contain t_train_per_point directly.
+                % Fallback for older result files: t_train_total / N_train * 1000.
                 if isfield(S, 't_train_per_point')
                     TrainTime_all(mi, si) = S.t_train_per_point;
                 elseif isfield(S, 't_train_total') && isfield(S, 'N_train') && S.N_train > 0
@@ -174,11 +185,11 @@ SummaryTable = cell2table(rows, ...
     'SMSE_mean','SMSE_std','MSLL_mean','MSLL_std', ...
     'TrainTime_mspt_mean','TrainTime_mspt_std'});
 
-csv_path = fullfile(FigFolder, 'M_ablation_summary_DAC_tr40.csv');
-writetable(SummaryTable, csv_path);
-fprintf('Summary table saved to:\n%s\n', csv_path);
+summary_csv_path = fullfile(FigFolder, 'M_ablation_summary_DAC_tr40.csv');
+writetable(SummaryTable, summary_csv_path);
+fprintf('Summary table saved to:\n%s\n', summary_csv_path);
 
-%% ===================== Print best M summary =====================
+%% ===================== Best M summary in command window =====================
 
 fprintf('\n============================================================\n');
 fprintf('Best M summary based on minimum SMSE, minimum MSLL, and train time\n');
@@ -208,28 +219,19 @@ for di = 1:numel(Dataset_list)
     end
 end
 
-fprintf('%s\n', repmat('-',1,72));
+fprintf('%s\n', repmat('-',1,96));
 
-%% ===================== Low / Medium / High and selected M tables =====================
+%% ===================== Low / Medium / High tables =====================
 
 M_level_name = {'Low','Medium','High'};
 M_level      = [500 1500 2500];
 
-fprintf('\n\n============================================================\n');
-fprintf('Low / Medium / High M trade-off tables\n');
-fprintf('Averaged over seeds = 1:3\n');
-fprintf('============================================================\n\n');
-
 %% ------------------------------------------------------------------------
-% Detailed table sorted as Dataset -> Level/M -> Method
+% Detailed long table:
+% Dataset | Level | M | Method | Train Time | SMSE | MSLL
 % -------------------------------------------------------------------------
 
 LevelRows = {};
-
-fprintf('## Detailed Low / Medium / High Table\n\n');
-fprintf('Averaged over seeds = 1:3. Sorted as Dataset -> Level/M -> Method.\n\n');
-fprintf('| Dataset | Level | M | Method | Train Time (ms/pt) | SMSE | MSLL |\n');
-fprintf('|---|---|---:|---|---:|---:|---:|\n');
 
 for di = 1:numel(Dataset_list)
     dataset = Dataset_list{di};
@@ -258,10 +260,6 @@ for di = 1:numel(Dataset_list)
             msll_mean = d.MSLL_mean(idx_M);
             msll_std  = d.MSLL_std(idx_M);
 
-            fprintf('| %s | %s | %d | %s | %.4g | %.4g | %.4g |\n', ...
-                dataset, level_name, M, method_label, ...
-                train_time_mean, smse_mean, msll_mean);
-
             LevelRows(end+1,:) = { ...
                 dataset, level_name, M, method_label, ...
                 train_time_mean, train_time_std, ...
@@ -280,17 +278,11 @@ LevelTable = cell2table(LevelRows, ...
 
 level_csv_path = fullfile(FigFolder, 'M_level_tradeoff_table_dataset_level_method.csv');
 writetable(LevelTable, level_csv_path);
-
 fprintf('\nDetailed CSV table saved to:\n%s\n', level_csv_path);
 
 %% ------------------------------------------------------------------------
 % Compact table averaged over methods
 % -------------------------------------------------------------------------
-
-fprintf('\n\n## Compact Low / Medium / High Table Averaged over Methods\n\n');
-fprintf('This compact table averages POE, GPOE, MOE, BCM, and RBCM for each dataset and M level.\n\n');
-fprintf('| Dataset | Level | M | Avg Train Time (ms/pt) | Avg SMSE | Avg MSLL | Observation |\n');
-fprintf('|---|---|---:|---:|---:|---:|---|\n');
 
 CompactRows = {};
 
@@ -326,9 +318,6 @@ for di = 1:numel(Dataset_list)
 
         observation = make_level_observation(dataset, level_name);
 
-        fprintf('| %s | %s | %d | %.4g | %.4g | %.4g | %s |\n', ...
-            dataset, level_name, M, avg_time, avg_smse, avg_msll, observation);
-
         CompactRows(end+1,:) = { ...
             dataset, level_name, M, ...
             avg_time, avg_smse, avg_msll, observation ...
@@ -342,15 +331,66 @@ CompactTable = cell2table(CompactRows, ...
 
 compact_csv_path = fullfile(FigFolder, 'M_level_tradeoff_compact_avg_methods.csv');
 writetable(CompactTable, compact_csv_path);
+fprintf('Compact CSV table saved to:\n%s\n', compact_csv_path);
 
-fprintf('\nCompact CSV table saved to:\n%s\n', compact_csv_path);
+%% ------------------------------------------------------------------------
+% Metric-first CSV table:
+% Dataset | Metric | Level | M | POE | GPOE | MOE | BCM | RBCM
+% -------------------------------------------------------------------------
+
+MetricFirstRows = {};
+
+metric_names  = {'Train Time', 'SMSE', 'MSLL'};
+metric_fields = {'TrainTime_mean_mspt', 'SMSE_mean', 'MSLL_mean'};
+
+for di = 1:numel(Dataset_list)
+    dataset = Dataset_list{di};
+
+    for metric_id = 1:numel(metric_names)
+        metric_name  = metric_names{metric_id};
+        metric_field = metric_fields{metric_id};
+
+        for li = 1:numel(M_level)
+            level_name = M_level_name{li};
+            M = M_level(li);
+
+            vals = nan(1, numel(Method_label));
+
+            for ci = 1:numel(Method_label)
+                method_label = Method_label{ci};
+
+                idx = strcmp(LevelTable.Dataset, dataset) & ...
+                      strcmp(LevelTable.Level, level_name) & ...
+                      strcmp(LevelTable.Method, method_label) & ...
+                      LevelTable.M == M;
+
+                if any(idx)
+                    vals(ci) = LevelTable.(metric_field)(idx);
+                end
+            end
+
+            MetricFirstRows(end+1,:) = { ...
+                dataset, metric_name, level_name, M, ...
+                vals(1), vals(2), vals(3), vals(4), vals(5) ...
+            }; %#ok<SAGROW>
+        end
+    end
+end
+
+MetricFirstTable = cell2table(MetricFirstRows, ...
+    'VariableNames', {'Dataset','Metric','Level','M', ...
+    'POE','GPOE','MOE','BCM','RBCM'});
+
+metric_first_csv_path = fullfile(FigFolder, 'M_level_tradeoff_metric_first.csv');
+writetable(MetricFirstTable, metric_first_csv_path);
+fprintf('Metric-first CSV table saved to:\n%s\n', metric_first_csv_path);
 
 %% ------------------------------------------------------------------------
 % Selected M decision table
 % -------------------------------------------------------------------------
 
 SelectedRows = {
-    'KIN40K',      1800, 'Balanced choice: best MSLL region with strong SMSE improvement; M=2500 improves SMSE but worsens MSLL and costs more.';
+    'KIN40K',      1800, 'Balanced choice: best MSLL region with strong SMSE improvement; M=2500 improves SMSE but weakens MSLL and costs more.';
     'POL',         2000, 'Balanced choice: near-best SMSE and best MSLL region; M=2500 gives slightly lower SMSE but weaker MSLL.';
     'PUMADYN32NM', 1500, 'Saturated dataset: M=1500 is sufficient; larger M increases training time with negligible metric gain.';
     'SARCOS',      2500, 'Largest tested M is justified: both SMSE and MSLL continue improving up to M=2500.';
@@ -359,32 +399,19 @@ SelectedRows = {
 SelectedTable = cell2table(SelectedRows, ...
     'VariableNames', {'Dataset','SelectedM','Reason'});
 
-fprintf('\n\n## Selected Number of Inducing Points\n\n');
-fprintf('| Dataset | Selected M | Reason |\n');
-fprintf('|---|---:|---|\n');
-
-for r = 1:height(SelectedTable)
-    fprintf('| %s | %d | %s |\n', ...
-        SelectedTable.Dataset{r}, ...
-        SelectedTable.SelectedM(r), ...
-        SelectedTable.Reason{r});
-end
-
 selected_csv_path = fullfile(FigFolder, 'M_selected_inducing_points.csv');
 writetable(SelectedTable, selected_csv_path);
+fprintf('Selected M CSV table saved to:\n%s\n', selected_csv_path);
 
-fprintf('\nSelected M CSV table saved to:\n%s\n', selected_csv_path);
+%% ===================== Save metric-first Markdown report =====================
 
-%% ------------------------------------------------------------------------
-% Save all tables to Markdown file
-% -------------------------------------------------------------------------
-
-md_path = fullfile(FigFolder, 'M_level_tradeoff_and_selection_tables.md');
+md_path = fullfile(FigFolder, 'M_ablation_report_tables_metric_first.md');
 fid = fopen(md_path, 'w');
 
-fprintf(fid, '# M-level Trade-off and Inducing Point Selection\n\n');
+fprintf(fid, '# M-ablation Trade-off Tables\n\n');
 fprintf(fid, 'Averaged over seeds = 1:3. Low = M=500, Medium = M=1500, High = M=2500.\n\n');
 
+%% Recommended M table
 fprintf(fid, '## Recommended Number of Inducing Points\n\n');
 fprintf(fid, '| Dataset | Selected M | Reason |\n');
 fprintf(fid, '|---|---:|---|\n');
@@ -396,6 +423,7 @@ for r = 1:height(SelectedTable)
         SelectedTable.Reason{r});
 end
 
+%% Compact averaged table
 fprintf(fid, '\n\n## Compact Low / Medium / High Table Averaged over Methods\n\n');
 fprintf(fid, '| Dataset | Level | M | Avg Train Time (ms/pt) | Avg SMSE | Avg MSLL | Observation |\n');
 fprintf(fid, '|---|---|---:|---:|---:|---:|---|\n');
@@ -410,120 +438,100 @@ for r = 1:height(CompactTable)
         CompactTable.AvgMSLL(r), ...
         CompactTable.Observation{r});
 end
+%% Metric-first one-table-per-dataset layout
+fprintf(fid, '\n\n## Metric-first Tables by Dataset\n\n');
+fprintf(fid, 'For each dataset, SMSE, MSLL, and train time are organized in one table. Methods are columns and M levels are rows.\n\n');
 
-fprintf(fid, '\n\n## Detailed Grouped Table by Dataset, M Level, and Method\n\n');
-fprintf(fid, 'This detailed table is sorted as Dataset -> Level/M -> Method.\n\n');
-
-fprintf(fid, '<table>\n');
-
-fprintf(fid, '<tr>\n');
-fprintf(fid, '<th>Dataset</th>\n');
-fprintf(fid, '<th>Level</th>\n');
-fprintf(fid, '<th>M</th>\n');
-fprintf(fid, '<th>Method</th>\n');
-fprintf(fid, '<th>Train Time (ms/pt)</th>\n');
-fprintf(fid, '<th>SMSE</th>\n');
-fprintf(fid, '<th>MSLL</th>\n');
-fprintf(fid, '</tr>\n');
+% Order in the table:
+%   1) SMSE
+%   2) MSLL
+%   3) Train Time
+metric_names_md  = {'SMSE', 'MSLL', 'Train Time (ms/pt)'};
+metric_fields_md = {'SMSE_mean', 'MSLL_mean', 'TrainTime_mean_mspt'};
 
 for di = 1:numel(Dataset_list)
     dataset = Dataset_list{di};
 
-    for li = 1:numel(M_level)
-        level_name = M_level_name{li};
-        M = M_level(li);
-        idx_M = find(M_list == M, 1);
+    fprintf(fid, '\n\n### %s\n\n', dataset);
 
-        if isempty(idx_M)
-            continue;
-        end
+    fprintf(fid, '| Metric | Level | M | POE | GPOE | MOE | BCM | RBCM |\n');
+    fprintf(fid, '|---|---|---:|---:|---:|---:|---:|---:|\n');
 
-        for ci = 1:numel(Method_list)
-            method = Method_list{ci};
-            method_label = Method_label{ci};
-            d = data.(method).(dataset);
+    for metric_id = 1:numel(metric_names_md)
+        metric_name  = metric_names_md{metric_id};
+        metric_field = metric_fields_md{metric_id};
 
-            train_time_mean = d.TrainTime_mean(idx_M);
-            smse_mean = d.SMSE_mean(idx_M);
-            msll_mean = d.MSLL_mean(idx_M);
+        for li = 1:numel(M_level)
+            level_name = M_level_name{li};
+            M = M_level(li);
 
-            fprintf(fid, '<tr>\n');
+            vals = nan(1, numel(Method_label));
 
-            % Dataset spans 3 levels x 5 methods = 15 rows.
-            if li == 1 && ci == 1
-                fprintf(fid, '<td rowspan="15"><b>%s</b></td>\n', dataset);
+            for ci = 1:numel(Method_label)
+                method_label = Method_label{ci};
+
+                idx = strcmp(LevelTable.Dataset, dataset) & ...
+                      strcmp(LevelTable.Level, level_name) & ...
+                      strcmp(LevelTable.Method, method_label) & ...
+                      LevelTable.M == M;
+
+                if any(idx)
+                    vals(ci) = LevelTable.(metric_field)(idx);
+                end
             end
 
-            % Level and M each span 5 method rows.
-            if ci == 1
-                fprintf(fid, '<td rowspan="5"><b>%s</b></td>\n', level_name);
-                fprintf(fid, '<td rowspan="5">%d</td>\n', M);
-            end
-
-            fprintf(fid, '<td>%s</td>\n', method_label);
-            fprintf(fid, '<td>%.4g</td>\n', train_time_mean);
-            fprintf(fid, '<td>%.4g</td>\n', smse_mean);
-            fprintf(fid, '<td>%.4g</td>\n', msll_mean);
-
-            fprintf(fid, '</tr>\n');
+            fprintf(fid, '| %s | %s | %d | %.4g | %.4g | %.4g | %.4g | %.4g |\n', ...
+                metric_name, level_name, M, ...
+                vals(1), vals(2), vals(3), vals(4), vals(5));
         end
     end
 end
 
-fprintf(fid, '</table>\n');
+%% ===================== Draw Word-friendly figures =====================
 
-fclose(fid);
-
-fprintf('\nMarkdown tables saved to:\n%s\n', md_path);
-
-%% ===================== Draw figures =====================
-
-draw_tradeoff_figure( ...
+draw_single_metric_figure( ...
     data, Method_list, Method_label, Dataset_list, M_list, x_unit, ...
     method_colors, method_markers, method_lines, ...
-    marker_idx, err_idx, show_errorbar, show_marker, ...
-    line_width, marker_size, ...
-    overall_range, false, ...
-    'Effect of the Number of Inducing Points under IP-DAC', ...
-    fullfile(FigFolder, 'M_ablation_overall_M100_2500_pretty'));
+    show_marker, line_width, marker_size, ...
+    overall_range, 'SMSE', ...
+    'Effect of Inducing Points on SMSE under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_SMSE_only_M100_2500'));
 
-draw_tradeoff_figure( ...
+draw_single_metric_figure( ...
     data, Method_list, Method_label, Dataset_list, M_list, x_unit, ...
     method_colors, method_markers, method_lines, ...
-    marker_idx, err_idx, show_errorbar, show_marker, ...
-    line_width, marker_size, ...
-    zoom_range, true, ...
-    'Zoomed View for $M \geq 10^3$ under IP-DAC', ...
-    fullfile(FigFolder, 'M_ablation_zoom_M1000_2500_pretty'));
+    show_marker, line_width, marker_size, ...
+    overall_range, 'MSLL', ...
+    'Effect of Inducing Points on MSLL under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_MSLL_only_M100_2500'));
 
-draw_time_tradeoff_figure( ...
+draw_single_metric_time_figure( ...
     data, Method_list, Method_label, Dataset_list, M_list, ...
     method_colors, method_markers, method_lines, ...
-    line_width, marker_size, ...
-    overall_range, false, ...
-    'Train-Time Trade-off under IP-DAC', ...
-    fullfile(FigFolder, 'M_ablation_train_time_tradeoff_overall'));
+    show_marker, line_width, marker_size, ...
+    overall_range, 'SMSE', ...
+    'Train-Time Trade-off for SMSE under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_train_time_SMSE_only_M100_2500'));
 
-draw_time_tradeoff_figure( ...
+draw_single_metric_time_figure( ...
     data, Method_list, Method_label, Dataset_list, M_list, ...
     method_colors, method_markers, method_lines, ...
-    line_width, marker_size, ...
-    zoom_range, true, ...
-    'Zoomed Train-Time Trade-off for $M \geq 10^3$ under IP-DAC', ...
-    fullfile(FigFolder, 'M_ablation_train_time_tradeoff_zoom_M1000_2500'));
+    show_marker, line_width, marker_size, ...
+    overall_range, 'MSLL', ...
+    'Train-Time Trade-off for MSLL under IP-DAC', ...
+    fullfile(FigFolder, 'M_ablation_train_time_MSLL_only_M100_2500'));
 
-fprintf('\nAll figures saved to:\n%s\n', FigFolder);
+fprintf('\nClean metric-first outputs saved to:\n%s\n', FigFolder);
 
 %% ========================================================================
-%% Local function: draw one 2 x 4 paper-style figure
+%% Local function: draw one metric against M, 1 x 4 Word-friendly figure
 %% ========================================================================
 
-function draw_tradeoff_figure( ...
+function draw_single_metric_figure( ...
     data, Method_list, Method_label, Dataset_list, M_list, x_unit, ...
     method_colors, method_markers, method_lines, ...
-    marker_idx, err_idx, show_errorbar, show_marker, ...
-    line_width, marker_size, ...
-    x_range_M, is_zoom, fig_title, save_prefix)
+    show_marker, line_width, marker_size, ...
+    x_range_M, metric_name, fig_title, save_prefix)
 
     nD = numel(Dataset_list);
     nM = numel(Method_list);
@@ -532,21 +540,11 @@ function draw_tradeoff_figure( ...
     x_plot_all = M_list(:) / x_unit;
     x_range = x_range_M / x_unit;
 
-    if is_zoom
-        fig_pos = [2, 2, 42, 17.5];
-        smse_min_range = 0.006;
-        msll_min_range = 0.040;
-    else
-        fig_pos = [2, 2, 42, 17.5];
-        smse_min_range = 0.015;
-        msll_min_range = 0.080;
-    end
-
     fig = figure('Color','w', ...
         'Units','centimeters', ...
-        'Position',fig_pos);
+        'Position',[2, 2, 29, 9.5]);
 
-    tl = tiledlayout(2, nD, ...
+    tl = tiledlayout(1, nD, ...
         'TileSpacing','compact', ...
         'Padding','compact');
 
@@ -555,38 +553,42 @@ function draw_tradeoff_figure( ...
     for di = 1:nD
         dataset = Dataset_list{di};
 
-        %% -------------------- Top row: SMSE --------------------
-        ax1 = nexttile(di);
-        hold(ax1, 'on');
+        ax = nexttile(di);
+        hold(ax, 'on');
 
-        all_smse_vals = [];
+        all_vals = [];
 
         for ci = 1:nM
             method = Method_list{ci};
             d = data.(method).(dataset);
 
-            y = d.SMSE_mean(:);
-            e = d.SMSE_std(:);
-
-            valid = x_mask(:) & isfinite(y) & y > 0;
+            switch upper(metric_name)
+                case 'SMSE'
+                    y = d.SMSE_mean(:);
+                    valid = x_mask(:) & isfinite(y) & y > 0;
+                case 'MSLL'
+                    y = d.MSLL_mean(:);
+                    valid = x_mask(:) & isfinite(y);
+                otherwise
+                    error('Unknown metric_name: %s. Use SMSE or MSLL.', metric_name);
+            end
 
             xv = x_plot_all(valid);
             yv = y(valid);
-            ev = e(valid);
 
             if isempty(xv)
                 continue;
             end
 
-            h = plot(ax1, xv, yv, ...
+            h = plot(ax, xv, yv, ...
                 'LineStyle', method_lines{ci}, ...
                 'Color', method_colors(ci,:), ...
                 'LineWidth', line_width, ...
                 'DisplayName', Method_label{ci});
 
             if show_marker
-                local_marker_idx = choose_marker_indices(numel(xv), is_zoom);
-                plot(ax1, xv(local_marker_idx), yv(local_marker_idx), ...
+                local_marker_idx = choose_marker_indices(numel(xv), false);
+                plot(ax, xv(local_marker_idx), yv(local_marker_idx), ...
                     'LineStyle','none', ...
                     'Marker', method_markers{ci}, ...
                     'MarkerSize', marker_size, ...
@@ -594,117 +596,43 @@ function draw_tradeoff_figure( ...
                     'HandleVisibility','off');
             end
 
-            if show_errorbar
-                local_err_idx = err_idx(err_idx <= numel(xv));
-                errorbar(ax1, xv(local_err_idx), yv(local_err_idx), ev(local_err_idx), ...
-                    'LineStyle','none', ...
-                    'Color', method_colors(ci,:), ...
-                    'LineWidth', 0.6, ...
-                    'CapSize', 2, ...
-                    'HandleVisibility','off');
-            end
-
-            all_smse_vals = [all_smse_vals; yv]; %#ok<AGROW>
+            all_vals = [all_vals; yv]; %#ok<AGROW>
 
             if di == 1
                 legend_handles(ci) = h;
             end
         end
 
-        set(ax1, 'YScale','log');
-        xlim(ax1, x_range);
-        setup_x_ticks_scaled(ax1, x_range_M, x_unit, false);
-        xticklabels(ax1, []);
+        xlim(ax, x_range);
+        setup_x_ticks_scaled(ax, x_range_M, x_unit, true);
 
-        grid(ax1, 'on');
-        box(ax1, 'on');
+        grid(ax, 'on');
+        box(ax, 'on');
 
-        title(ax1, dataset, ...
+        title(ax, dataset, ...
             'FontSize', 12, ...
             'FontWeight','normal', ...
             'Interpreter','none');
 
-        ylabel(ax1, 'SMSE', 'FontSize', 12);
-
-        set(ax1, ...
-            'FontSize', 10, ...
-            'LineWidth', 0.85, ...
-            'TickDir','out', ...
-            'TickLabelInterpreter','latex');
-
-        apply_log_ylim(ax1, all_smse_vals, 0.07, smse_min_range);
-
-        %% -------------------- Bottom row: MSLL --------------------
-        ax2 = nexttile(nD + di);
-        hold(ax2, 'on');
-
-        all_msll_vals = [];
-
-        for ci = 1:nM
-            method = Method_list{ci};
-            d = data.(method).(dataset);
-
-            y = d.MSLL_mean(:);
-            e = d.MSLL_std(:);
-
-            valid = x_mask(:) & isfinite(y);
-
-            xv = x_plot_all(valid);
-            yv = y(valid);
-            ev = e(valid);
-
-            if isempty(xv)
-                continue;
-            end
-
-            plot(ax2, xv, yv, ...
-                'LineStyle', method_lines{ci}, ...
-                'Color', method_colors(ci,:), ...
-                'LineWidth', line_width, ...
-                'HandleVisibility','off');
-
-            if show_marker
-                local_marker_idx = choose_marker_indices(numel(xv), is_zoom);
-                plot(ax2, xv(local_marker_idx), yv(local_marker_idx), ...
-                    'LineStyle','none', ...
-                    'Marker', method_markers{ci}, ...
-                    'MarkerSize', marker_size, ...
-                    'Color', method_colors(ci,:), ...
-                    'HandleVisibility','off');
-            end
-
-            if show_errorbar
-                local_err_idx = err_idx(err_idx <= numel(xv));
-                errorbar(ax2, xv(local_err_idx), yv(local_err_idx), ev(local_err_idx), ...
-                    'LineStyle','none', ...
-                    'Color', method_colors(ci,:), ...
-                    'LineWidth', 0.6, ...
-                    'CapSize', 2, ...
-                    'HandleVisibility','off');
-            end
-
-            all_msll_vals = [all_msll_vals; yv]; %#ok<AGROW>
-        end
-
-        xlim(ax2, x_range);
-        setup_x_ticks_scaled(ax2, x_range_M, x_unit, true);
-
-        grid(ax2, 'on');
-        box(ax2, 'on');
-
-        xlabel(ax2, '$M\;(\times 10^3)$', ...
+        xlabel(ax, '$M\;(\times 10^3)$', ...
             'FontSize', 12, ...
             'Interpreter','latex');
 
-        ylabel(ax2, 'MSLL', 'FontSize', 12);
+        ylabel(ax, metric_name, 'FontSize', 12);
 
-        set(ax2, ...
+        set(ax, ...
             'FontSize', 10, ...
             'LineWidth', 0.85, ...
             'TickDir','out', ...
             'TickLabelInterpreter','latex');
 
-        apply_linear_ylim(ax2, all_msll_vals, 0.08, msll_min_range);
+        switch upper(metric_name)
+            case 'SMSE'
+                set(ax, 'YScale','log');
+                apply_log_ylim(ax, all_vals, 0.07, 0.015);
+            case 'MSLL'
+                apply_linear_ylim(ax, all_vals, 0.08, 0.080);
+        end
     end
 
     lgd = legend(legend_handles, Method_label, ...
@@ -722,39 +650,28 @@ function draw_tradeoff_figure( ...
 
     exportgraphics(fig, [save_prefix '.png'], 'Resolution', 300);
     exportgraphics(fig, [save_prefix '.pdf'], 'ContentType','vector');
-    savefig(fig, [save_prefix '.fig']);
 end
 
 %% ========================================================================
-%% Local function: draw train-time trade-off figure
+%% Local function: draw one metric against train time, 1 x 4 Word-friendly figure
 %% ========================================================================
 
-function draw_time_tradeoff_figure( ...
+function draw_single_metric_time_figure( ...
     data, Method_list, Method_label, Dataset_list, M_list, ...
     method_colors, method_markers, method_lines, ...
-    line_width, marker_size, ...
-    x_range_M, is_zoom, fig_title, save_prefix)
+    show_marker, line_width, marker_size, ...
+    x_range_M, metric_name, fig_title, save_prefix)
 
     nD = numel(Dataset_list);
     nM = numel(Method_list);
 
     x_mask = M_list >= x_range_M(1) & M_list <= x_range_M(2);
 
-    if is_zoom
-        fig_pos = [2, 2, 42, 17.5];
-        smse_min_range = 0.006;
-        msll_min_range = 0.040;
-    else
-        fig_pos = [2, 2, 42, 17.5];
-        smse_min_range = 0.015;
-        msll_min_range = 0.080;
-    end
-
     fig = figure('Color','w', ...
         'Units','centimeters', ...
-        'Position',fig_pos);
+        'Position',[2, 2, 29, 9.5]);
 
-    tl = tiledlayout(2, nD, ...
+    tl = tiledlayout(1, nD, ...
         'TileSpacing','compact', ...
         'Padding','compact');
 
@@ -763,21 +680,29 @@ function draw_time_tradeoff_figure( ...
     for di = 1:nD
         dataset = Dataset_list{di};
 
-        %% -------------------- Top row: Train time vs SMSE --------------------
-        ax1 = nexttile(di);
-        hold(ax1, 'on');
+        ax = nexttile(di);
+        hold(ax, 'on');
 
-        all_smse_vals = [];
-        all_time_vals = [];
+        all_x_vals = [];
+        all_y_vals = [];
 
         for ci = 1:nM
             method = Method_list{ci};
             d = data.(method).(dataset);
 
             x = d.TrainTime_mean(:);   % ms/pt
-            y = d.SMSE_mean(:);
 
-            valid = x_mask(:) & isfinite(x) & isfinite(y) & x > 0 & y > 0;
+            switch upper(metric_name)
+                case 'SMSE'
+                    y = d.SMSE_mean(:);
+                    valid = x_mask(:) & isfinite(x) & isfinite(y) & x > 0 & y > 0;
+                case 'MSLL'
+                    y = d.MSLL_mean(:);
+                    valid = x_mask(:) & isfinite(x) & isfinite(y) & x > 0;
+                otherwise
+                    error('Unknown metric_name: %s. Use SMSE or MSLL.', metric_name);
+            end
+
             xv = x(valid);
             yv = y(valid);
             Mv = M_list(valid);
@@ -786,111 +711,60 @@ function draw_time_tradeoff_figure( ...
                 continue;
             end
 
+            % Sort by M, so the line direction still represents increasing M.
             [~, order] = sort(Mv);
             xv = xv(order);
             yv = yv(order);
 
-            h = plot(ax1, xv, yv, ...
+            h = plot(ax, xv, yv, ...
                 'LineStyle', method_lines{ci}, ...
                 'Color', method_colors(ci,:), ...
                 'LineWidth', line_width, ...
                 'DisplayName', Method_label{ci});
 
-            local_marker_idx = choose_marker_indices(numel(xv), is_zoom);
-            plot(ax1, xv(local_marker_idx), yv(local_marker_idx), ...
-                'LineStyle','none', ...
-                'Marker', method_markers{ci}, ...
-                'MarkerSize', marker_size, ...
-                'Color', method_colors(ci,:), ...
-                'HandleVisibility','off');
+            if show_marker
+                local_marker_idx = choose_marker_indices(numel(xv), false);
+                plot(ax, xv(local_marker_idx), yv(local_marker_idx), ...
+                    'LineStyle','none', ...
+                    'Marker', method_markers{ci}, ...
+                    'MarkerSize', marker_size, ...
+                    'Color', method_colors(ci,:), ...
+                    'HandleVisibility','off');
+            end
 
-            all_smse_vals = [all_smse_vals; yv]; %#ok<AGROW>
-            all_time_vals = [all_time_vals; xv]; %#ok<AGROW>
+            all_x_vals = [all_x_vals; xv]; %#ok<AGROW>
+            all_y_vals = [all_y_vals; yv]; %#ok<AGROW>
 
             if di == 1
                 legend_handles(ci) = h;
             end
         end
 
-        set(ax1, 'YScale','log');
-        apply_linear_xlim(ax1, all_time_vals, 0.08, 0.02);
-        apply_log_ylim(ax1, all_smse_vals, 0.07, smse_min_range);
+        apply_linear_xlim(ax, all_x_vals, 0.08, 0.02);
 
-        grid(ax1, 'on');
-        box(ax1, 'on');
+        switch upper(metric_name)
+            case 'SMSE'
+                set(ax, 'YScale','log');
+                apply_log_ylim(ax, all_y_vals, 0.07, 0.015);
+            case 'MSLL'
+                apply_linear_ylim(ax, all_y_vals, 0.08, 0.080);
+        end
 
-        title(ax1, dataset, ...
+        grid(ax, 'on');
+        box(ax, 'on');
+
+        title(ax, dataset, ...
             'FontSize', 12, ...
             'FontWeight','normal', ...
             'Interpreter','none');
 
-        ylabel(ax1, 'SMSE', 'FontSize', 12);
-        xticklabels(ax1, []);
-
-        set(ax1, ...
-            'FontSize', 10, ...
-            'LineWidth', 0.85, ...
-            'TickDir','out', ...
-            'TickLabelInterpreter','latex');
-
-        %% -------------------- Bottom row: Train time vs MSLL --------------------
-        ax2 = nexttile(nD + di);
-        hold(ax2, 'on');
-
-        all_msll_vals = [];
-        all_time_vals = [];
-
-        for ci = 1:nM
-            method = Method_list{ci};
-            d = data.(method).(dataset);
-
-            x = d.TrainTime_mean(:);   % ms/pt
-            y = d.MSLL_mean(:);
-
-            valid = x_mask(:) & isfinite(x) & isfinite(y) & x > 0;
-            xv = x(valid);
-            yv = y(valid);
-            Mv = M_list(valid);
-
-            if isempty(xv)
-                continue;
-            end
-
-            [~, order] = sort(Mv);
-            xv = xv(order);
-            yv = yv(order);
-
-            plot(ax2, xv, yv, ...
-                'LineStyle', method_lines{ci}, ...
-                'Color', method_colors(ci,:), ...
-                'LineWidth', line_width, ...
-                'HandleVisibility','off');
-
-            local_marker_idx = choose_marker_indices(numel(xv), is_zoom);
-            plot(ax2, xv(local_marker_idx), yv(local_marker_idx), ...
-                'LineStyle','none', ...
-                'Marker', method_markers{ci}, ...
-                'MarkerSize', marker_size, ...
-                'Color', method_colors(ci,:), ...
-                'HandleVisibility','off');
-
-            all_msll_vals = [all_msll_vals; yv]; %#ok<AGROW>
-            all_time_vals = [all_time_vals; xv]; %#ok<AGROW>
-        end
-
-        apply_linear_xlim(ax2, all_time_vals, 0.08, 0.02);
-        apply_linear_ylim(ax2, all_msll_vals, 0.08, msll_min_range);
-
-        grid(ax2, 'on');
-        box(ax2, 'on');
-
-        xlabel(ax2, 'Train Time (ms/pt)', ...
+        xlabel(ax, 'Train Time (ms/pt)', ...
             'FontSize', 12, ...
             'Interpreter','none');
 
-        ylabel(ax2, 'MSLL', 'FontSize', 12);
+        ylabel(ax, metric_name, 'FontSize', 12);
 
-        set(ax2, ...
+        set(ax, ...
             'FontSize', 10, ...
             'LineWidth', 0.85, ...
             'TickDir','out', ...
@@ -912,7 +786,6 @@ function draw_time_tradeoff_figure( ...
 
     exportgraphics(fig, [save_prefix '.png'], 'Resolution', 300);
     exportgraphics(fig, [save_prefix '.pdf'], 'ContentType','vector');
-    savefig(fig, [save_prefix '.fig']);
 end
 
 %% ========================================================================
