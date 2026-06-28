@@ -5,12 +5,16 @@
 %   Metrics: SMSE, MSLL, and train time
 %   Mean/std over Monte Carlo seeds
 %
-% Changes in this pretty version:
-%   1) x-axis is plotted in units of 10^3, so ticks are simple: 0.1, 0.5, 1, 1.5, 2, 2.5
-%   2) x-axis label is M (x10^3), avoiding crowded scientific tick labels
-%   3) zoomed view uses M >= 1000 by default, better for POL/SARCOS details
-%   4) adaptive y-limits for each subplot
-%   5) additional cost-aware plots: Train Time vs SMSE and Train Time vs MSLL
+% Outputs:
+%   1) Full M-ablation summary CSV
+%   2) Low / Medium / High M tables
+%   3) Selected inducing-point number table
+%   4) Paper-style figures
+%
+% Notes:
+%   Low    = M=500
+%   Medium = M=1500
+%   High   = M=2500
 
 clear; clc; close all;
 
@@ -27,8 +31,9 @@ train_ratio = 0.4;
 tr_tag      = round(train_ratio * 100);
 
 ProjectRoot = fileparts(mfilename('fullpath'));
+
 % If needed, force it manually:
-% ProjectRoot = '/Users/duyurou/Desktop/ip/mas_gp_code/dac_code/mas_2D_test/data/Gaussian_Process';
+% ProjectRoot = 'C:\Users\Yurou Du\Desktop\mas-2d-gp-control\data\Gaussian_Process';
 
 ResultRoot = fullfile(ProjectRoot, 'Result', 'Dataset');
 
@@ -63,7 +68,6 @@ method_lines   = {'-','-','-','-','-'};
 line_width  = 1.35;
 marker_size = 4.2;
 
-% Marker density. For zoom view this is recalculated locally.
 marker_idx = 1:4:numel(M_list);
 err_idx    = 1:5:numel(M_list);
 
@@ -80,8 +84,8 @@ for ci = 1:numel(Method_list)
 
         ResultFolder = fullfile(ResultRoot, dataset);
 
-        SMSE_all = nan(numel(M_list), numel(seeds));
-        MSLL_all = nan(numel(M_list), numel(seeds));
+        SMSE_all      = nan(numel(M_list), numel(seeds));
+        MSLL_all      = nan(numel(M_list), numel(seeds));
         TrainTime_all = nan(numel(M_list), numel(seeds));   % ms/pt
 
         for mi = 1:numel(M_list)
@@ -99,7 +103,8 @@ for ci = 1:numel(Method_list)
                     continue;
                 end
 
-                S = load(fpath, 'smse', 'msll', 't_train_per_point', 't_train_total', 'N_train');
+                S = load(fpath, 'smse', 'msll', ...
+                    't_train_per_point', 't_train_total', 'N_train');
 
                 if isfield(S, 'smse')
                     SMSE_all(mi, si) = S.smse;
@@ -109,9 +114,9 @@ for ci = 1:numel(Method_list)
                     MSLL_all(mi, si) = S.msll;
                 end
 
-                % Training time in ms/pt. New result files should contain
-                % t_train_per_point directly. For older result files, fall
-                % back to t_train_total / N_train.
+                % Training time in ms/pt.
+                % New result files should contain t_train_per_point directly.
+                % For older result files, fall back to t_train_total / N_train.
                 if isfield(S, 't_train_per_point')
                     TrainTime_all(mi, si) = S.t_train_per_point;
                 elseif isfield(S, 't_train_total') && isfield(S, 'N_train') && S.N_train > 0
@@ -129,15 +134,15 @@ for ci = 1:numel(Method_list)
         data.(method).(dataset).TrainTime_mean = mean(TrainTime_all, 2, 'omitnan');
         data.(method).(dataset).TrainTime_std  = std(TrainTime_all, 0, 2, 'omitnan');
 
-        data.(method).(dataset).SMSE_all = SMSE_all;
-        data.(method).(dataset).MSLL_all = MSLL_all;
+        data.(method).(dataset).SMSE_all      = SMSE_all;
+        data.(method).(dataset).MSLL_all      = MSLL_all;
         data.(method).(dataset).TrainTime_all = TrainTime_all;
     end
 end
 
 fprintf('\nData loading finished. Missing files: %d\n', MissingCounter);
 
-%% ===================== Export summary table =====================
+%% ===================== Export full summary table =====================
 
 rows = {};
 
@@ -178,6 +183,7 @@ fprintf('Summary table saved to:\n%s\n', csv_path);
 fprintf('\n============================================================\n');
 fprintf('Best M summary based on minimum SMSE, minimum MSLL, and train time\n');
 fprintf('============================================================\n');
+
 fprintf('%-12s %-6s | %-22s | %-22s | %-18s\n', ...
     'Dataset', 'Method', 'Best SMSE', 'Best MSLL', 'Time@BestMSLL');
 fprintf('%s\n', repmat('-',1,96));
@@ -204,6 +210,272 @@ end
 
 fprintf('%s\n', repmat('-',1,72));
 
+%% ===================== Low / Medium / High and selected M tables =====================
+
+M_level_name = {'Low','Medium','High'};
+M_level      = [500 1500 2500];
+
+fprintf('\n\n============================================================\n');
+fprintf('Low / Medium / High M trade-off tables\n');
+fprintf('Averaged over seeds = 1:3\n');
+fprintf('============================================================\n\n');
+
+%% ------------------------------------------------------------------------
+% Detailed table sorted as Dataset -> Level/M -> Method
+% -------------------------------------------------------------------------
+
+LevelRows = {};
+
+fprintf('## Detailed Low / Medium / High Table\n\n');
+fprintf('Averaged over seeds = 1:3. Sorted as Dataset -> Level/M -> Method.\n\n');
+fprintf('| Dataset | Level | M | Method | Train Time (ms/pt) | SMSE | MSLL |\n');
+fprintf('|---|---|---:|---|---:|---:|---:|\n');
+
+for di = 1:numel(Dataset_list)
+    dataset = Dataset_list{di};
+
+    for li = 1:numel(M_level)
+        level_name = M_level_name{li};
+        M = M_level(li);
+        idx_M = find(M_list == M, 1);
+
+        if isempty(idx_M)
+            warning('M=%d is not found in M_list.', M);
+            continue;
+        end
+
+        for ci = 1:numel(Method_list)
+            method = Method_list{ci};
+            method_label = Method_label{ci};
+            d = data.(method).(dataset);
+
+            train_time_mean = d.TrainTime_mean(idx_M);
+            train_time_std  = d.TrainTime_std(idx_M);
+
+            smse_mean = d.SMSE_mean(idx_M);
+            smse_std  = d.SMSE_std(idx_M);
+
+            msll_mean = d.MSLL_mean(idx_M);
+            msll_std  = d.MSLL_std(idx_M);
+
+            fprintf('| %s | %s | %d | %s | %.4g | %.4g | %.4g |\n', ...
+                dataset, level_name, M, method_label, ...
+                train_time_mean, smse_mean, msll_mean);
+
+            LevelRows(end+1,:) = { ...
+                dataset, level_name, M, method_label, ...
+                train_time_mean, train_time_std, ...
+                smse_mean, smse_std, ...
+                msll_mean, msll_std ...
+            }; %#ok<SAGROW>
+        end
+    end
+end
+
+LevelTable = cell2table(LevelRows, ...
+    'VariableNames', {'Dataset','Level','M','Method', ...
+    'TrainTime_mean_mspt','TrainTime_std_mspt', ...
+    'SMSE_mean','SMSE_std', ...
+    'MSLL_mean','MSLL_std'});
+
+level_csv_path = fullfile(FigFolder, 'M_level_tradeoff_table_dataset_level_method.csv');
+writetable(LevelTable, level_csv_path);
+
+fprintf('\nDetailed CSV table saved to:\n%s\n', level_csv_path);
+
+%% ------------------------------------------------------------------------
+% Compact table averaged over methods
+% -------------------------------------------------------------------------
+
+fprintf('\n\n## Compact Low / Medium / High Table Averaged over Methods\n\n');
+fprintf('This compact table averages POE, GPOE, MOE, BCM, and RBCM for each dataset and M level.\n\n');
+fprintf('| Dataset | Level | M | Avg Train Time (ms/pt) | Avg SMSE | Avg MSLL | Observation |\n');
+fprintf('|---|---|---:|---:|---:|---:|---|\n');
+
+CompactRows = {};
+
+for di = 1:numel(Dataset_list)
+    dataset = Dataset_list{di};
+
+    for li = 1:numel(M_level)
+        level_name = M_level_name{li};
+        M = M_level(li);
+        idx_M = find(M_list == M, 1);
+
+        if isempty(idx_M)
+            warning('M=%d is not found in M_list.', M);
+            continue;
+        end
+
+        time_vals = [];
+        smse_vals = [];
+        msll_vals = [];
+
+        for ci = 1:numel(Method_list)
+            method = Method_list{ci};
+            d = data.(method).(dataset);
+
+            time_vals(end+1) = d.TrainTime_mean(idx_M); %#ok<SAGROW>
+            smse_vals(end+1) = d.SMSE_mean(idx_M); %#ok<SAGROW>
+            msll_vals(end+1) = d.MSLL_mean(idx_M); %#ok<SAGROW>
+        end
+
+        avg_time = mean(time_vals, 'omitnan');
+        avg_smse = mean(smse_vals, 'omitnan');
+        avg_msll = mean(msll_vals, 'omitnan');
+
+        observation = make_level_observation(dataset, level_name);
+
+        fprintf('| %s | %s | %d | %.4g | %.4g | %.4g | %s |\n', ...
+            dataset, level_name, M, avg_time, avg_smse, avg_msll, observation);
+
+        CompactRows(end+1,:) = { ...
+            dataset, level_name, M, ...
+            avg_time, avg_smse, avg_msll, observation ...
+        }; %#ok<SAGROW>
+    end
+end
+
+CompactTable = cell2table(CompactRows, ...
+    'VariableNames', {'Dataset','Level','M', ...
+    'AvgTrainTime_mspt','AvgSMSE','AvgMSLL','Observation'});
+
+compact_csv_path = fullfile(FigFolder, 'M_level_tradeoff_compact_avg_methods.csv');
+writetable(CompactTable, compact_csv_path);
+
+fprintf('\nCompact CSV table saved to:\n%s\n', compact_csv_path);
+
+%% ------------------------------------------------------------------------
+% Selected M decision table
+% -------------------------------------------------------------------------
+
+SelectedRows = {
+    'KIN40K',      1800, 'Balanced choice: best MSLL region with strong SMSE improvement; M=2500 improves SMSE but worsens MSLL and costs more.';
+    'POL',         2000, 'Balanced choice: near-best SMSE and best MSLL region; M=2500 gives slightly lower SMSE but weaker MSLL.';
+    'PUMADYN32NM', 1500, 'Saturated dataset: M=1500 is sufficient; larger M increases training time with negligible metric gain.';
+    'SARCOS',      2500, 'Largest tested M is justified: both SMSE and MSLL continue improving up to M=2500.';
+};
+
+SelectedTable = cell2table(SelectedRows, ...
+    'VariableNames', {'Dataset','SelectedM','Reason'});
+
+fprintf('\n\n## Selected Number of Inducing Points\n\n');
+fprintf('| Dataset | Selected M | Reason |\n');
+fprintf('|---|---:|---|\n');
+
+for r = 1:height(SelectedTable)
+    fprintf('| %s | %d | %s |\n', ...
+        SelectedTable.Dataset{r}, ...
+        SelectedTable.SelectedM(r), ...
+        SelectedTable.Reason{r});
+end
+
+selected_csv_path = fullfile(FigFolder, 'M_selected_inducing_points.csv');
+writetable(SelectedTable, selected_csv_path);
+
+fprintf('\nSelected M CSV table saved to:\n%s\n', selected_csv_path);
+
+%% ------------------------------------------------------------------------
+% Save all tables to Markdown file
+% -------------------------------------------------------------------------
+
+md_path = fullfile(FigFolder, 'M_level_tradeoff_and_selection_tables.md');
+fid = fopen(md_path, 'w');
+
+fprintf(fid, '# M-level Trade-off and Inducing Point Selection\n\n');
+fprintf(fid, 'Averaged over seeds = 1:3. Low = M=500, Medium = M=1500, High = M=2500.\n\n');
+
+fprintf(fid, '## Recommended Number of Inducing Points\n\n');
+fprintf(fid, '| Dataset | Selected M | Reason |\n');
+fprintf(fid, '|---|---:|---|\n');
+
+for r = 1:height(SelectedTable)
+    fprintf(fid, '| %s | %d | %s |\n', ...
+        SelectedTable.Dataset{r}, ...
+        SelectedTable.SelectedM(r), ...
+        SelectedTable.Reason{r});
+end
+
+fprintf(fid, '\n\n## Compact Low / Medium / High Table Averaged over Methods\n\n');
+fprintf(fid, '| Dataset | Level | M | Avg Train Time (ms/pt) | Avg SMSE | Avg MSLL | Observation |\n');
+fprintf(fid, '|---|---|---:|---:|---:|---:|---|\n');
+
+for r = 1:height(CompactTable)
+    fprintf(fid, '| %s | %s | %d | %.4g | %.4g | %.4g | %s |\n', ...
+        CompactTable.Dataset{r}, ...
+        CompactTable.Level{r}, ...
+        CompactTable.M(r), ...
+        CompactTable.AvgTrainTime_mspt(r), ...
+        CompactTable.AvgSMSE(r), ...
+        CompactTable.AvgMSLL(r), ...
+        CompactTable.Observation{r});
+end
+
+fprintf(fid, '\n\n## Detailed Grouped Table by Dataset, M Level, and Method\n\n');
+fprintf(fid, 'This detailed table is sorted as Dataset -> Level/M -> Method.\n\n');
+
+fprintf(fid, '<table>\n');
+
+fprintf(fid, '<tr>\n');
+fprintf(fid, '<th>Dataset</th>\n');
+fprintf(fid, '<th>Level</th>\n');
+fprintf(fid, '<th>M</th>\n');
+fprintf(fid, '<th>Method</th>\n');
+fprintf(fid, '<th>Train Time (ms/pt)</th>\n');
+fprintf(fid, '<th>SMSE</th>\n');
+fprintf(fid, '<th>MSLL</th>\n');
+fprintf(fid, '</tr>\n');
+
+for di = 1:numel(Dataset_list)
+    dataset = Dataset_list{di};
+
+    for li = 1:numel(M_level)
+        level_name = M_level_name{li};
+        M = M_level(li);
+        idx_M = find(M_list == M, 1);
+
+        if isempty(idx_M)
+            continue;
+        end
+
+        for ci = 1:numel(Method_list)
+            method = Method_list{ci};
+            method_label = Method_label{ci};
+            d = data.(method).(dataset);
+
+            train_time_mean = d.TrainTime_mean(idx_M);
+            smse_mean = d.SMSE_mean(idx_M);
+            msll_mean = d.MSLL_mean(idx_M);
+
+            fprintf(fid, '<tr>\n');
+
+            % Dataset spans 3 levels x 5 methods = 15 rows.
+            if li == 1 && ci == 1
+                fprintf(fid, '<td rowspan="15"><b>%s</b></td>\n', dataset);
+            end
+
+            % Level and M each span 5 method rows.
+            if ci == 1
+                fprintf(fid, '<td rowspan="5"><b>%s</b></td>\n', level_name);
+                fprintf(fid, '<td rowspan="5">%d</td>\n', M);
+            end
+
+            fprintf(fid, '<td>%s</td>\n', method_label);
+            fprintf(fid, '<td>%.4g</td>\n', train_time_mean);
+            fprintf(fid, '<td>%.4g</td>\n', smse_mean);
+            fprintf(fid, '<td>%.4g</td>\n', msll_mean);
+
+            fprintf(fid, '</tr>\n');
+        end
+    end
+end
+
+fprintf(fid, '</table>\n');
+
+fclose(fid);
+
+fprintf('\nMarkdown tables saved to:\n%s\n', md_path);
+
 %% ===================== Draw figures =====================
 
 draw_tradeoff_figure( ...
@@ -224,8 +496,6 @@ draw_tradeoff_figure( ...
     'Zoomed View for $M \geq 10^3$ under IP-DAC', ...
     fullfile(FigFolder, 'M_ablation_zoom_M1000_2500_pretty'));
 
-% Additional cost-aware figure requested by the supervisor:
-% x-axis = training time, y-axis = SMSE / MSLL.
 draw_time_tradeoff_figure( ...
     data, Method_list, Method_label, Dataset_list, M_list, ...
     method_colors, method_markers, method_lines, ...
@@ -455,7 +725,6 @@ function draw_tradeoff_figure( ...
     savefig(fig, [save_prefix '.fig']);
 end
 
-
 %% ========================================================================
 %% Local function: draw train-time trade-off figure
 %% ========================================================================
@@ -517,8 +786,7 @@ function draw_time_tradeoff_figure( ...
                 continue;
             end
 
-            % Sort by M, not by time, because the line represents increasing M.
-            [Mv, order] = sort(Mv); %#ok<ASGLU>
+            [~, order] = sort(Mv);
             xv = xv(order);
             yv = yv(order);
 
@@ -588,7 +856,7 @@ function draw_time_tradeoff_figure( ...
                 continue;
             end
 
-            [Mv, order] = sort(Mv); %#ok<ASGLU>
+            [~, order] = sort(Mv);
             xv = xv(order);
             yv = yv(order);
 
@@ -676,7 +944,7 @@ function setup_x_ticks_scaled(ax, x_range_M, x_unit, show_labels)
 end
 
 %% ========================================================================
-%% Local function: y-axis helpers
+%% Local function: axis helpers
 %% ========================================================================
 
 function apply_linear_xlim(ax, x_values, pad_ratio, min_range)
@@ -756,5 +1024,60 @@ function idx = choose_marker_indices(n, is_zoom)
         idx = unique([1, round(linspace(1,n,min(5,n))), n]);
     else
         idx = unique([1, round(linspace(1,n,min(6,n))), n]);
+    end
+end
+
+function observation = make_level_observation(dataset, level_name)
+    switch dataset
+        case 'KIN40K'
+            switch level_name
+                case 'Low'
+                    observation = 'Underfitting';
+                case 'Medium'
+                    observation = 'Good trade-off';
+                case 'High'
+                    observation = 'Better SMSE, weaker MSLL';
+                otherwise
+                    observation = '';
+            end
+
+        case 'POL'
+            switch level_name
+                case 'Low'
+                    observation = 'Underfitting';
+                case 'Medium'
+                    observation = 'Good trade-off';
+                case 'High'
+                    observation = 'Better SMSE, slightly weaker MSLL';
+                otherwise
+                    observation = '';
+            end
+
+        case 'PUMADYN32NM'
+            switch level_name
+                case 'Low'
+                    observation = 'Already saturated';
+                case 'Medium'
+                    observation = 'No meaningful gain';
+                case 'High'
+                    observation = 'Extra cost only';
+                otherwise
+                    observation = '';
+            end
+
+        case 'SARCOS'
+            switch level_name
+                case 'Low'
+                    observation = 'Good but not saturated';
+                case 'Medium'
+                    observation = 'Better';
+                case 'High'
+                    observation = 'Best overall';
+                otherwise
+                    observation = '';
+            end
+
+        otherwise
+            observation = '';
     end
 end

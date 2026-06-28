@@ -2,6 +2,8 @@ function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMo
 % Inducing-point online learning version requested by advisor:
 %   1) Zero offline samples: each LocalGP starts from the prior.
 %   2) No online data trigger: every agent adds one online sample at every time step.
+%   2b) Broadcast-level consensus trigger statistics are reported.
+%   2c) If ode45 fails to finish one sampling interval, stop and save debug data.
 %   3) Consensus communication ET is still kept:
 %      - DAC modes: dynamic average consensus ET through gp_masked_aggregation_update.
 %      - AC modes : static average consensus ET following the dataset IP-AC logic.
@@ -9,8 +11,12 @@ function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMo
 % Modes:
 %   poe/gpoe/moe/bcm/rbcm       : IP-DAC + always-online data update
 %   poe_ac/gpoe_ac/...          : IP-AC  + always-online data update
+%   poe_direct                  : direct centralized IP aggregation debug, no DAC/AC consensus
 %   local                       : local GP + always-online data update
 %   exact                       : exact unknown dynamics, no GP learning
+%
+% This version adds the initial agent states x_i(0) to the inducing-point set
+% as anchors. This is NOT offline GP training data; LocalGP offline data remains zero.
 
 if nargin < 4
     use_formation = true;
@@ -131,8 +137,10 @@ SigmaN_set = 0.01 * ones(AgentQuantity,1);
 
 dac_methods = {'poe','gpoe','moe','bcm','rbcm'};
 ac_methods  = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};
+direct_methods = {'poe_direct','gpoe_direct','moe_direct','bcm_direct','rbcm_direct'};
 
 mode_lower = lower(CurrentMode);
+is_direct_mode = ismember(mode_lower, direct_methods);
 
 % Current advisor-requested online-learning setting:
 % start from zero offline samples, then add online data during the closed-loop simulation.
@@ -166,13 +174,88 @@ end
 % Advisor-requested setting: no online trigger.
 % Every GP-based mode adds the current sample at every time step.
 % Therefore eta-bound computation and DistributedET are not used in this version.
-online_learning_modes = [dac_methods, ac_methods, {'local'}];
+online_learning_modes = [dac_methods, ac_methods, direct_methods, {'local'}];
+
+%% 8. Initial State and First Online Sample at t = 0
+% Offline data is zero. The first sample at t = 0 is treated as online data,
+% so the initial inducing-point aggregation is not built from empty GPs.
+rng(42);
+
+x_all = rand(x_dim*AgentQuantity, 1);
+
+x_all_set = nan(x_dim*AgentQuantity, T);
+x_all_set(:,1) = x_all;
+
+vartheta_all_set = nan(x_dim*AgentQuantity, T);
+vartheta_all_set(:,1) = x_all - s_all_set(:,1) - ...
+    kron(ones(AgentQuantity,1), xl_set(:,1));
+
+f_hat_matrix  = zeros(y_dim, AgentQuantity);
+f_true_matrix = zeros(y_dim, AgentQuantity);
+
+TrackingError_vector = zeros(1, T);
+
+f_hat_all_set  = nan(y_dim, AgentQuantity, T);
+f_true_all_set = nan(y_dim, AgentQuantity, T);
+
+% Diagnostic signals for tracking-error debugging.
+state_norm_vector            = nan(1, T);
+u_norm_vector                = nan(1, T-1);
+f_hat_norm_vector            = nan(1, T);
+f_true_norm_vector           = nan(1, T);
+prediction_error_norm_vector = nan(1, T);
+gp_used_vector               = false(1, T);
+
+% Online data update logging variables.
+% Since online data update is performed at every time point, these variables
+% are kept only as sanity-check logs and are not printed as trigger statistics.
+online_update_set   = zeros(AgentQuantity, T);
+online_update_count = zeros(AgentQuantity, 1);
+
+% First online sample at t = 0. This is not offline pretraining.
+x_all_matrix_0 = reshape(x_all_set(:,1), x_dim, AgentQuantity);
+
+if ismember(mode_lower, online_learning_modes)
+    online_update_set(:,1) = 1;
+
+    for AgentNr = 1:AgentQuantity
+        x_i_0 = x_all_matrix_0(:, AgentNr);
+
+        y_i_0 = Manipulator_2D_2DoF_UnknownDynamics(x_i_0) + ...
+                LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
+
+        LocalGP_set{AgentNr}.addPoint(x_i_0, y_i_0);
+        online_update_count(AgentNr) = online_update_count(AgentNr) + 1;
+    end
+end
 
 %% 9. Inducing Points & Aggregation Init
 Kappa_P = 1;
-NumInducingPoints = 400;
-InducingPoints_Coordinates = 2*DomainScale*rand(x_dim, NumInducingPoints) - DomainScale;
+NumBaseInducingPoints = 400;
+InducingPoints_Coordinates = 2*DomainScale*rand(x_dim, NumBaseInducingPoints) - DomainScale;
+
+% -------------------------------------------------------------------------
+% Initial-state inducing anchors
+% -------------------------------------------------------------------------
+% Offline GP training data is still zero.  These anchors are only additional
+% inducing-point locations used by the surrogate MaskedGP reconstruction.
+% Motivation: with offline data = 0, the first online sample is at x_i(0).
+% If the fixed inducing set does not cover x_i(0), the reconstructed MaskedGP
+% can fit phi(z_m) perfectly at the inducing points but still predict poorly
+% at the actual control query state x_i(0).
+use_initial_state_anchors = true;
+initial_state_anchors = [];
+
+if use_initial_state_anchors
+    initial_state_anchors = x_all_matrix_0;
+    InducingPoints_Coordinates = [InducingPoints_Coordinates, initial_state_anchors];
+end
+
+NumInducingPoints = size(InducingPoints_Coordinates, 2);
 L_lap = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
+
+fprintf('Inducing points: base = %d, initial anchors = %d, total = %d\n', ...
+    NumBaseInducingPoints, size(initial_state_anchors,2), NumInducingPoints);
 
 % Dataset-style consensus ET parameters.
 N_degree = sum(L_lap < 0, 2);
@@ -188,17 +271,19 @@ p_dim = [];
 % DAC state variables.
 Zeta_vector_inducing = [];
 Zeta_last_trigger = [];
-dac_total_trigger_count = zeros(AgentQuantity, 1);
+% gp_masked_aggregation_update returns broadcast-level trigger counts:
+% one event per agent per time step when the agent transmits its consensus state.
+dac_total_broadcast_count = zeros(AgentQuantity, 1);
+% Backward-compatible alias used by some old batch scripts.
+dac_total_trigger_count = dac_total_broadcast_count;
 neighbor_count_per_agent = sum(L_lap < 0, 2);
 
 % AC state variables.
 Xi_ac = [];
 Xi_last_trigger_ac = [];
 
-% AC communication statistics are separated into two levels:
-%   1) broadcast count: one communication event per agent and time step
-%      if at least one inducing point triggers;
-%   2) point count: point-wise trigger events for fair comparison with DAC.
+% AC communication statistics. Final reporting uses broadcast-level counts.
+% point_count is kept only as an internal diagnostic.
 ac_total_broadcast_count = zeros(AgentQuantity, 1);
 ac_total_point_count     = zeros(AgentQuantity, NumInducingPoints);
 
@@ -223,6 +308,23 @@ if ismember(mode_lower, dac_methods)
         NumInducingPoints, 0, InducingPoints_Coordinates, ...
         SigmaF, SigmaL, x_dim, base_method, p_dim, ...
         Zeta_last_trigger, neighbor_count_per_agent);
+
+elseif is_direct_mode
+    % Direct centralized inducing-point aggregation for diagnosis only.
+    % This bypasses the DAC/AC consensus layer. If this mode works while
+    % poe fails, then the problem is in the DAC consensus tracking layer.
+    base_method = strrep(mode_lower, '_direct', '');
+
+    warning_state_gp_init = warning('off','all');
+    [P_inducing, p_dim] = gp_masked_aggregation_init( ...
+        LocalGP_set, AgentQuantity, NumInducingPoints, ...
+        InducingPoints_Coordinates, base_method);
+    warning(warning_state_gp_init);
+
+    P_direct = repmat(mean(P_inducing, 2), [1, AgentQuantity, 1]);
+    MaskedGP = build_maskedgp_from_consensus_state( ...
+        P_direct, base_method, AgentQuantity, NumInducingPoints, ...
+        p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
 
 elseif ismember(mode_lower, ac_methods)
     base_method = strrep(mode_lower, '_ac', '');
@@ -249,32 +351,6 @@ else
     error('Unknown CurrentMode: %s', CurrentMode);
 end
 
-%% 10. Initial State
-rng(42);
-
-x_all = rand(x_dim*AgentQuantity, 1);
-
-x_all_set = nan(x_dim*AgentQuantity, T);
-x_all_set(:,1) = x_all;
-
-vartheta_all_set = nan(x_dim*AgentQuantity, T);
-vartheta_all_set(:,1) = x_all - s_all_set(:,1) - ...
-    kron(ones(AgentQuantity,1), xl_set(:,1));
-
-f_hat_matrix  = zeros(y_dim, AgentQuantity);
-f_true_matrix = zeros(y_dim, AgentQuantity);
-
-TrackingError_vector = zeros(1, T);
-
-f_hat_all_set  = nan(y_dim, AgentQuantity, T);
-f_true_all_set = nan(y_dim, AgentQuantity, T);
-
-% Online data update logging variables.
-% Since online data update is performed at every step, these variables are
-% kept only as sanity-check logs and are not printed as trigger statistics.
-online_update_set   = zeros(AgentQuantity, T);
-online_update_count = zeros(AgentQuantity, 1);
-
 %% 11. Control Loop
 opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);
 tic;
@@ -299,13 +375,17 @@ for t_Nr = 1:T-1
     vartheta_cell = ET_MAS_GP_Leader_vector2cell(vartheta_all, AgentQuantity, SystemOrder);
 
     TrackingError_vector(t_Nr) = norm(vartheta_all);
+    state_norm_vector(t_Nr) = norm(x_all);
 
     %% 11.1 Consensus law for controller
     [phi_cell, r_matrix, e_cell] = Manipulator_2D_2DoF_ConsensusLaw( ...
         vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
 
     %% 11.2 Prediction using current model
-    if ismember(mode_lower, dac_methods) || ismember(mode_lower, ac_methods)
+    % Minimal change from the original code:
+    % no online-data trigger, but the controller still uses the current GP model
+    % exactly as before. No artificial min-data gate or control clamp is added.
+    if ismember(mode_lower, dac_methods) || ismember(mode_lower, ac_methods) || is_direct_mode
         for n = 1:AgentQuantity
             [mu_hat,~] = MaskedGP{n}.predict(x_all_matrix(:,n));
             f_hat_matrix(:,n) = max(-30, min(30, mu_hat));
@@ -323,6 +403,8 @@ for t_Nr = 1:T-1
         end
     end
 
+    gp_used_vector(t_Nr) = ismember(mode_lower, [dac_methods, ac_methods, direct_methods, {'local','offline','exact'}]);
+
     %% 11.3 Record prediction and true dynamics
     for n = 1:AgentQuantity
         f_true_matrix(:,n) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix(:,n));
@@ -331,13 +413,51 @@ for t_Nr = 1:T-1
     f_hat_all_set(:,:,t_Nr)  = f_hat_matrix;
     f_true_all_set(:,:,t_Nr) = f_true_matrix;
 
+    f_hat_norm_vector(t_Nr)            = norm(f_hat_matrix(:));
+    f_true_norm_vector(t_Nr)           = norm(f_true_matrix(:));
+    prediction_error_norm_vector(t_Nr) = norm(f_true_matrix(:) - f_hat_matrix(:));
+
     %% 11.4 Control input and system simulation
     u_cell = Manipulator_2D_2DoF_get_u_cell( ...
         x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
 
-    [~, x_all_temp] = ode45( ...
+    % Diagnostic only: record the control norm without modifying u_cell.
+    u_flat = [];
+    for AgentNr = 1:AgentQuantity
+        u_flat = [u_flat; u_cell{AgentNr}(:)]; %#ok<AGROW>
+    end
+    u_norm_vector(t_Nr) = norm(u_flat);
+
+    [t_ode, x_all_temp] = ode45( ...
         @(t,x) Manipulator_2D_2DoF_MultiAgent_DynamicFunction(t, x, u_cell, L1, L2, m1, m2), ...
         [t, t+t_step], x_all, opts);
+
+    % Diagnostic stop: if ode45 cannot reach the end of this sampling interval,
+    % do not continue with unreliable states. Save the current variables so that
+    % the source of the tracking-error / integration issue can be inspected.
+    if isempty(t_ode) || t_ode(end) < t + t_step - 1e-10
+        if ~exist(SaveFolderName,'dir')
+            mkdir(SaveFolderName);
+        end
+
+        debug_file = fullfile(SaveFolderName, [SaveFileName, '_ODE_FAIL_DEBUG.mat']);
+
+        save(debug_file, ...
+            'CurrentMode', 't_Nr', 't', 't_step', 't_set', ...
+            'x_all', 'x_all_matrix', 'x_all_temp', 't_ode', ...
+            'u_cell', 'u_flat', 'f_hat_matrix', 'f_true_matrix', ...
+            'TrackingError_vector', 'vartheta_all_set', 'x_all_set', ...
+            'state_norm_vector', 'u_norm_vector', ...
+            'f_hat_norm_vector', 'f_true_norm_vector', ...
+            'prediction_error_norm_vector', ...
+            'online_update_set', 'online_update_count', ...
+            'LocalGP_set', 'MaskedGP', ...
+            'P_inducing', 'Zeta_vector_inducing', 'Zeta_last_trigger', ...
+            'Xi_ac', 'Xi_last_trigger_ac', ...
+            'dac_total_broadcast_count', 'ac_total_broadcast_count');
+
+        error('ode45 failed at t = %.6f. Debug data saved to: %s', t, debug_file);
+    end
 
     x_all_next = x_all_temp(end,:)';
     x_all_set(:, t_Nr+1) = x_all_next;
@@ -352,10 +472,13 @@ for t_Nr = 1:T-1
     updated_agents = [];
 
     if ismember(mode_lower, online_learning_modes)
-        online_update_set(:, t_Nr) = 1;   % kept as a data-update indicator for logging
+        % Add the newly observed state x(t_{k+1}) as the next online sample.
+        % The initial state x(t_0) was already added before aggregation init.
+        online_update_set(:, t_Nr+1) = 1;
+        x_all_next_matrix = reshape(x_all_next, x_dim, AgentQuantity);
 
         for AgentNr = 1:AgentQuantity
-            x_i = x_all_matrix(:, AgentNr);
+            x_i = x_all_next_matrix(:, AgentNr);
 
             y_i = Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
                   LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
@@ -398,7 +521,28 @@ for t_Nr = 1:T-1
             MaskedGP = MaskedGP_new;
         end
 
-        dac_total_trigger_count = dac_total_trigger_count + dac_step_triggers;
+        dac_total_broadcast_count = dac_total_broadcast_count + dac_step_triggers;
+        dac_total_trigger_count = dac_total_broadcast_count;
+
+    elseif is_direct_mode
+        % Direct centralized aggregation diagnostic.
+        % Recompute P for updated local GPs, then rebuild the aggregate directly
+        % from the current P_inducing target. No consensus dynamics/trigger is used.
+        if any_online_update
+            for updatedAgentIdx = 1:numel(updated_agents)
+                UpdatedAgentNr = updated_agents(updatedAgentIdx);
+
+                P_inducing = recompute_P_single_agent( ...
+                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
+                    NumInducingPoints, InducingPoints_Coordinates, ...
+                    AgentQuantity, base_method);
+            end
+        end
+
+        P_direct = repmat(mean(P_inducing, 2), [1, AgentQuantity, 1]);
+        MaskedGP = build_maskedgp_from_consensus_state( ...
+            P_direct, base_method, AgentQuantity, NumInducingPoints, ...
+            p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
 
     elseif ismember(mode_lower, ac_methods)
         % AC consensus ET: static average consensus layer, dataset-style.
@@ -415,10 +559,10 @@ for t_Nr = 1:T-1
                     AgentQuantity, base_method);
             end
 
+            % Original static-AC logic: when the input Pi changes because of new
+            % online data, restart the static average-consensus state.
             Xi_ac = P_inducing;
-            % Do NOT reset Xi_last_trigger_ac here.
-            % Xi_last_trigger_ac stores the last actually transmitted AC state
-            % and should only be updated when the AC communication trigger fires.
+            Xi_last_trigger_ac = P_inducing;
         end
 
         [MaskedGP, Xi_ac, Xi_last_trigger_ac, ...
@@ -443,6 +587,7 @@ for t_Nr = 1:T-1
 end
 
 TrackingError_vector(end) = norm(vartheta_all_set(:,end));
+state_norm_vector(end) = norm(x_all_set(:,end));
 
 %% 12. Final Record and Statistics
 
@@ -454,42 +599,75 @@ for n = 1:AgentQuantity
     f_true_all_set(:,n,end) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix_end(:,n));
     f_hat_all_set(:,n,end)  = f_hat_matrix(:,n);
 end
+f_hat_norm_vector(end)            = norm(f_hat_all_set(:,:,end), 'fro');
+f_true_norm_vector(end)           = norm(f_true_all_set(:,:,end), 'fro');
+prediction_error_norm_vector(end) = norm(f_true_all_set(:,:,end) - f_hat_all_set(:,:,end), 'fro');
+gp_used_vector(end)               = gp_used_vector(end-1);
 
 elapsed_time = toc;
 
 fprintf('\n==================================================\n');
 fprintf('Mode: %s\n', CurrentMode);
 fprintf('Formation: %d\n', use_formation);
+fprintf('Initial-state inducing anchors: %d\n', use_initial_state_anchors);
 fprintf('Total simulation time: %.2f s\n', elapsed_time);
 fprintf('Final tracking error: %.6f\n', TrackingError_vector(end));
 
-dac_trigger_count_per_agent_point = 0;
-ac_trigger_count_per_agent        = 0;
-ac_trigger_count_per_agent_point  = 0;
+dac_trigger_count_per_agent        = 0;
+dac_trigger_count_per_agent_point  = 0;  % diagnostic only
+ac_trigger_count_per_agent         = 0;
+ac_trigger_count_per_agent_point   = 0;  % diagnostic only
+dac_trigger_rate_percent           = 0;
+ac_trigger_rate_percent            = 0;
+
+[max_tracking_error, max_tracking_idx] = max(TrackingError_vector);
+[max_state_norm, max_state_idx] = max(state_norm_vector);
+[max_u_norm, max_u_idx] = max(u_norm_vector);
+[max_pred_err, max_pred_idx] = max(prediction_error_norm_vector);
 
 if ismember(lower(CurrentMode), dac_methods)
 
-    dac_trigger_count_per_agent_point = ...
-        mean(dac_total_trigger_count) / NumInducingPoints;
+    % Broadcast-level consensus communication count.
+    % gp_masked_aggregation_update already returns one trigger per agent per time step,
+    % so it should NOT be divided by NumInducingPoints.
+    dac_trigger_count_per_agent = mean(dac_total_broadcast_count);
+    dac_trigger_rate_percent = dac_trigger_count_per_agent / (T-1) * 100;
+
+    % Diagnostic only: old point-normalized display, not used as final communication count.
+    dac_trigger_count_per_agent_point = dac_trigger_count_per_agent / NumInducingPoints;
 
     fprintf('\nDAC consensus ET:\n');
-    fprintf('  Average triggers: %.4f / agent / inducing point\n', ...
-        dac_trigger_count_per_agent_point);
+    fprintf('  Communication triggers: %.2f / agent (%.2f%% of steps)\n', ...
+        dac_trigger_count_per_agent, dac_trigger_rate_percent);
 
 elseif ismember(lower(CurrentMode), ac_methods)
 
+    % Broadcast-level consensus communication count.
     ac_trigger_count_per_agent = mean(ac_total_broadcast_count);
+    ac_trigger_rate_percent = ac_trigger_count_per_agent / (T-1) * 100;
 
+    % Diagnostic only: point-wise triggering inside the inducing-point state.
     ac_trigger_count_per_agent_point = ...
         mean(sum(ac_total_point_count, 2)) / NumInducingPoints;
 
     fprintf('\nAC consensus ET:\n');
-    fprintf('  Broadcast triggers: %.2f / agent\n', ...
-        ac_trigger_count_per_agent);
-    fprintf('  Point triggers: %.4f / agent / inducing point\n', ...
-        ac_trigger_count_per_agent_point);
+    fprintf('  Communication triggers: %.2f / agent (%.2f%% of steps)\n', ...
+        ac_trigger_count_per_agent, ac_trigger_rate_percent);
+
+elseif is_direct_mode
+    fprintf('\nDirect IP aggregation diagnostic:\n');
+    fprintf('  DAC/AC consensus layer bypassed. Communication triggers: 0.00 / agent\n');
 end
 
+fprintf('\nTracking diagnostics:\n');
+fprintf('  Max tracking error: %.6f at t = %.4f\n', ...
+    max_tracking_error, t_set(max_tracking_idx));
+fprintf('  Max state norm: %.6f at t = %.4f\n', ...
+    max_state_norm, t_set(max_state_idx));
+fprintf('  Max control norm: %.6f at t = %.4f\n', ...
+    max_u_norm, t_set(max_u_idx));
+fprintf('  Max prediction error norm: %.6f at t = %.4f\n', ...
+    max_pred_err, t_set(max_pred_idx));
 fprintf('==================================================\n');
 %% 13. Save
 if nargin >= 3
@@ -502,22 +680,38 @@ if nargin >= 3
         'TrackingError_vector', ...
         'CurrentMode', ...
         'use_formation', ...
+        'mode_lower', ...
+        'base_method', ...
+        'is_direct_mode', ...
         'f_hat_all_set', ...
         'f_true_all_set', ...
         'vartheta_all_set', ...
         'online_update_set', ...
         'online_update_count', ...
         'dac_total_trigger_count', ...
+        'dac_total_broadcast_count', ...
+        'dac_trigger_count_per_agent', ...
+        'dac_trigger_rate_percent', ...
         'dac_trigger_count_per_agent_point', ...
         'ac_total_trigger_count', ...
         'ac_total_broadcast_count', ...
         'ac_total_point_count', ...
         'ac_trigger_count_per_agent', ...
+        'ac_trigger_rate_percent', ...
         'ac_trigger_count_per_agent_point', ...
         'NumInducingPoints', ...
+        'NumBaseInducingPoints', ...
+        'use_initial_state_anchors', ...
+        'initial_state_anchors', ...
         'Kappa_P', ...
         'elapsed_time', ...
-        'OfflineDataQuantity_set');
+        'OfflineDataQuantity_set', ...
+        'state_norm_vector', ...
+        'u_norm_vector', ...
+        'f_hat_norm_vector', ...
+        'f_true_norm_vector', ...
+        'prediction_error_norm_vector', ...
+        'gp_used_vector');
 end
 
 end
