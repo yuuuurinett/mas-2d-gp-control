@@ -25,10 +25,10 @@ for AgentNr = 1:AgentQuantity
         x_m = InducingPoints_Coordinates(:, InducingPointIdx);  % x_dim x 1
         [mu_n, var_n] = LocalGP_set{AgentNr}.predict(x_m);  % 2x1, 2x1
 
-        mu1  = mu_n(1); 
-        var1 = var_n(1);
-        mu2  = mu_n(2);  
-        var2 = var_n(2);
+        mu1  = max(-30, min(30, mu_n(1)));
+        var1 = max(var_n(1), 1e-3);
+        mu2  = max(-30, min(30, mu_n(2)));
+        var2 = max(var_n(2), 1e-3);
 
         switch method
 

@@ -15,8 +15,11 @@ for m = 1:M
     [mu_n, var_n] = LocalGP_set{AgentNr}.predict(x_m);
 
     for d = 1:y_dim
-        mu = mu_n(d);
-        vs = max(var_n(d), 1e-8);
+        % 均值截断：防止online learning初期GP外推产生离谱预测值
+        mu = max(-30, min(30, mu_n(d)));
+        % 方差下限：1e-8对GP而言太小，容易在数据点重合时让1/vs爆炸
+        % 提高到1e-3，符合物理上GP不确定性的合理下限
+        vs = max(var_n(d), 1e-3);
         beta = 0.5 * (log(prior_var) - log(vs));
         beta = max(min(beta, 10), eps);
 
@@ -46,6 +49,10 @@ for m = 1:M
             otherwise
                 error('Unknown aggregation method: %s', method);
         end
+
+        % 最后一道防线：限制P值幅度，防止任何残余的数值问题传播到consensus层
+        P(2*d-1, AgentNr, m) = max(-1e4, min(1e4, P(2*d-1, AgentNr, m)));
+        P(2*d,   AgentNr, m) = max(-1e4, min(1e4, P(2*d,   AgentNr, m)));
     end
 end
 end

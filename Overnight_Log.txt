@@ -188412,3 +188412,46 @@ Train=17794  Test=3000  x=21  y=7
 ==================================================================================================================================
   任务结束时间: 19-Jun-2026 14:46:33
 ==================================================================================================================================
+
+======================================================
+  任务开始时间: 29-Jun-2026 00:52:24
+======================================================
+
+>>> 处理数据集: KIN40K <<<
+加载数据集: KIN40K  (seed=1, train_ratio=40%)
+Total: 40000  Train: 16000  Test(eval): 3000  x_dim: 8  y_dim: 1
+SigmaF=1.2966  SigmaN=0.0733
+
+--- LoG-MOE ---
+  训练进度: 1000/16000
+  训练进度: 2000/16000
+  训练进度: 3000/16000
+  训练进度: 4000/16000
+  训练进度: 5000/16000
+  训练进度: 6000/16000
+  训练进度: 7000/16000
+  训练进度: 8000/16000
+  训练进度: 9000/16000
+  训练进度: 10000/16000
+  训练进度: 11000/16000
+  训练进度: 12000/16000
+  训练进度: 13000/16000
+  训练进度: 14000/16000
+  训练进度: 15000/16000
+  训练进度: 16000/16000
+激活局部GP数量: 96  训练耗时: 7.95 秒 (平均 0.50 ms/点)
+测试前 ActivatedGPQuantity = 96
+  预测进度: 2000/3000
+测试后 ActivatedGPQuantity = 96  预测耗时: 0.98 秒 (平均 0.33 ms/点)
+  SMSE=0.0432  RMSE=0.2074  NLPD=-0.2513  Train: 0.50 ms/pt  Test: 0.33 ms/pt
+{Error using <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('save')" style="font-weight:bold">save</a>
+Cannot create 'log_moe_mc1.mat' because 'Result\Dataset\KIN40K' does not exist.
+
+Error in <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_LoGGP_comparison', 'C:\Users\Yurou Du\Desktop\mas-2d-gp-control\data\Gaussian_Process\run_LoGGP_comparison.m', 155)" style="font-weight:bold">run_LoGGP_comparison</a> (<a href="matlab: opentoline('C:\Users\Yurou Du\Desktop\mas-2d-gp-control\data\Gaussian_Process\run_LoGGP_comparison.m',155,0)">line 155</a>)
+    save(fullfile(SaveFolder, save_name), ...
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Error in <a href="matlab:matlab.lang.internal.introspective.errorDocCallback('run_mc_dataset', 'C:\Users\Yurou Du\Desktop\mas-2d-gp-control\data\Gaussian_Process\run_mc_dataset.m', 59)" style="font-weight:bold">run_mc_dataset</a> (<a href="matlab: opentoline('C:\Users\Yurou Du\Desktop\mas-2d-gp-control\data\Gaussian_Process\run_mc_dataset.m',59,0)">line 59</a>)
+        if run_log, run_LoGGP_comparison(dname, train_ratio, seed); end
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+run_mc_dataset

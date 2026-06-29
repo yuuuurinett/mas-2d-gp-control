@@ -58,12 +58,12 @@ end
 FineRegion.KIN40K      = [1000 2000];  % Medium region
 FineRegion.POL         = [1000 2000];  % Medium region
 FineRegion.PUMADYN32NM = [100 1000];   % Low region
-FineRegion.SARCOS      = [2000 2500];  % High region
+FineRegion.SARCOS      = [1500 2500];  % High region
 
 CoarseRegionName.KIN40K      = 'Medium';
 CoarseRegionName.POL         = 'Medium';
 CoarseRegionName.PUMADYN32NM = 'Low';
-CoarseRegionName.SARCOS      = 'High';
+CoarseRegionName.SARCOS      = 'Medium to High';
 
 %% ===================== Read data =====================
 

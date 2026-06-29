@@ -111,11 +111,11 @@ MaxDataPerAgent = min(floor(N_train/AgentQuantity), 3000);
 
 switch upper(DatasetName)
     case {'KIN40K'}
-        NumInducingPoints = 2500;
+        NumInducingPoints = 1500;
     case {'POL'}
-        NumInducingPoints = 2000;
+        NumInducingPoints = 1300;
     case {'PUMADYN32NM'}
-        NumInducingPoints = 500;
+        NumInducingPoints = 300;
     otherwise
         NumInducingPoints = 1500;
 end
