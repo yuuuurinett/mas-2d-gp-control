@@ -55,7 +55,7 @@ end
 %% ===================== Coarse regions =====================
 % These regions come from the Low/Medium/High table.
 
-FineRegion.KIN40K      = [1000 2000];  % Medium region
+FineRegion.KIN40K      = [1500 2500];  % Medium region
 FineRegion.POL         = [1000 2000];  % Medium region
 FineRegion.PUMADYN32NM = [100 1000];   % Low region
 FineRegion.SARCOS      = [1500 2500];  % High region

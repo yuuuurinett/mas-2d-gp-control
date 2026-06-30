@@ -111,16 +111,17 @@ MaxDataPerAgent = min(floor(N_train/AgentQuantity), 3000);
 
 switch upper(DatasetName)
     case {'KIN40K'}
-        NumInducingPoints = 1500;
+        NumInducingPoints = 2100;
     case {'POL'}
-        NumInducingPoints = 1300;
+        NumInducingPoints = 2000;
     case {'PUMADYN32NM'}
-        NumInducingPoints = 300;
+        NumInducingPoints = 200;
     otherwise
         NumInducingPoints = 1500;
 end
 fprintf('NumInducingPoints M = %d\n', NumInducingPoints);
-
+fprintf('[IP final MC] Dataset=%s, Mode=%s, seed=%d, M=%d\n', ...
+    DatasetName, CurrentMode, seed, NumInducingPoints);
 MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(AgentQuantity,1);
 L = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 N_degree = sum(L < 0, 2);

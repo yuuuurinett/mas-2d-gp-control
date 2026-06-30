@@ -66,11 +66,11 @@ train_ratio = 0.4;
 n_mc        = 10;
 
 % If all are false, this script only reads existing result files and prints/writes summary.
-run_log = false;
-run_ip  = false;
-run_tp  = false;
-run_cen = false;
-run_nbr = false;
+run_log = true;
+run_ip  = true;
+run_tp  = true;
+run_cen = true;
+run_nbr = true;
 
 tr_tag = round(train_ratio * 100);
 
