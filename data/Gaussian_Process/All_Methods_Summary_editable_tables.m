@@ -1,15 +1,13 @@
-%% export_summary_tables_to_html_big_metric_tables.m
-% One editable HTML table per metric, without automatic highlighting.
+%% export_summary_tables_to_html_dataset_columns.m
+% One editable HTML table per metric.
 %
-% Table layout:
-%   Columns: Aggregation groups = MOE / POE / GPOE / BCM / RBCM
-%            Each aggregation group contains datasets:
-%            KIN40K / POL / PUMA / SARCOS
+% Layout:
+%   Rows:
+%       Aggregation | Method family
+%   Columns:
+%       KIN40K | POL | PUMA | SARCOS
 %
-%   Rows:    LoG / CEN / IP-DAC / IP-AC / TP-DAC / TP-AC / NBR
-%
-% No automatic best-value highlighting.
-% The purpose is to compare IP-DAC against other method families manually.
+% This layout is Word-friendly and keeps one metric as one large table.
 
 clear; clc;
 
@@ -35,13 +33,9 @@ metrics_names = S.metrics_names;
 train_ratio   = S.train_ratio;
 n_mc          = S.n_mc;
 
-% Horizontal aggregation group order
 agg_list = {'MOE','POE','GPOE','BCM','RBCM'};
-
-% Vertical method-family order
 row_families = {'LoG','CEN','IP-DAC','IP-AC','TP-DAC','TP-AC','NBR'};
 
-% Compact dataset labels
 dataset_labels = datasets;
 dataset_labels(strcmp(dataset_labels, 'PUMADYN32NM')) = {'PUMA'};
 
@@ -50,14 +44,12 @@ if ~exist(OutFolder, 'dir')
     mkdir(OutFolder);
 end
 
-HtmlPath = fullfile(OutFolder, 'All_Methods_Summary_big_metric_tables.html');
+HtmlPath = fullfile(OutFolder, 'All_Methods_Summary_dataset_columns.html');
 
 fid = fopen(HtmlPath, 'w');
 if fid < 0
     error('Cannot open HTML file for writing:\n%s', HtmlPath);
 end
-
-%% ===================== HTML header =====================
 
 fprintf(fid, '<!DOCTYPE html>\n');
 fprintf(fid, '<html>\n<head>\n<meta charset="UTF-8">\n');
@@ -65,31 +57,25 @@ fprintf(fid, '<title>All Methods Summary</title>\n');
 
 fprintf(fid, '<style>\n');
 fprintf(fid, 'body { font-family: "Times New Roman", serif; margin: 20px; }\n');
-fprintf(fid, 'h1 { color: #b00000; font-size: 20pt; text-align: center; margin-top: 26px; }\n');
+fprintf(fid, 'h1 { color: #b00000; font-size: 20pt; text-align: center; margin-top: 24px; }\n');
 fprintf(fid, 'p { font-size: 10.5pt; }\n');
-
-% Wide table, so use compact font size.
-fprintf(fid, 'table { border-collapse: collapse; margin: 12px auto 30px auto; width: 100%%; table-layout: fixed; }\n');
-fprintf(fid, 'th, td { border: 1px solid black; padding: 4px 4px; text-align: center; font-size: 8.5pt; }\n');
+fprintf(fid, 'table { border-collapse: collapse; margin: 12px auto 30px auto; width: 92%%; table-layout: fixed; }\n');
+fprintf(fid, 'th, td { border: 1px solid black; padding: 5px 7px; text-align: center; font-size: 10pt; }\n');
 fprintf(fid, 'th { background-color: #cfe8f3; font-weight: bold; }\n');
-fprintf(fid, '.rowhead { font-weight: bold; background-color: #f7f7f7; width: 7%%; }\n');
-fprintf(fid, '.agghead { background-color: #cfe8f3; font-weight: bold; font-size: 10pt; }\n');
-fprintf(fid, '.datasethead { background-color: #e8f4fa; font-weight: bold; }\n');
+fprintf(fid, '.aggcol { font-weight: bold; background-color: #f2f2f2; }\n');
+fprintf(fid, '.methodcol { font-weight: bold; background-color: #f7f7f7; }\n');
+fprintf(fid, '.ipdac { font-weight: bold; background-color: #fff7cc; }\n');
 fprintf(fid, '.missing { color: #777777; }\n');
-
-% Word landscape layout hint
-fprintf(fid, '@page { size: landscape; margin: 0.5in; }\n');
-
+fprintf(fid, '@page { size: landscape; margin: 0.6in; }\n');
 fprintf(fid, '</style>\n');
+
 fprintf(fid, '</head>\n<body>\n');
 
 fprintf(fid, '<h1>All Methods Summary</h1>\n');
 fprintf(fid, '<p><b>Train ratio:</b> %.0f%% &nbsp;&nbsp; <b>Monte Carlo runs:</b> %d</p>\n', ...
     train_ratio * 100, n_mc);
 
-fprintf(fid, '<p>Each metric is shown as one large table. Columns are grouped by aggregation rule, and each aggregation group contains the four datasets. Rows are method families. No automatic best-value highlighting is used, so IP-DAC can be compared manually against the other method families.</p>\n');
-
-%% ===================== One big table per metric =====================
+fprintf(fid, '<p>Each metric is shown as one table. Rows are grouped by aggregation rule, and columns are datasets. The IP-DAC row is lightly emphasized for comparison.</p>\n');
 
 for met = 1:numel(metrics_names)
     metric_name = metrics_names{met};
@@ -97,68 +83,48 @@ for met = 1:numel(metrics_names)
     fprintf(fid, '\n<h1>Metric: %s &nbsp; (Train=%.0f%%, MC=%d)</h1>\n', ...
         html_escape(metric_name), train_ratio * 100, n_mc);
 
-    n_rows = numel(row_families);
-    n_agg  = numel(agg_list);
-    n_data = numel(datasets);
+    fprintf(fid, '<table>\n');
 
-    value_text = cell(n_rows, n_agg, n_data);
+    fprintf(fid, '<tr>\n');
+    fprintf(fid, '<th style="width:12%%;">Aggregation</th>\n');
+    fprintf(fid, '<th style="width:12%%;">Method</th>\n');
+    for d = 1:numel(dataset_labels)
+        fprintf(fid, '<th>%s</th>\n', html_escape(dataset_labels{d}));
+    end
+    fprintf(fid, '</tr>\n');
 
-    for r = 1:n_rows
-        family = row_families{r};
+    for a = 1:numel(agg_list)
+        agg = agg_list{a};
 
-        for a = 1:n_agg
-            agg = agg_list{a};
+        for r = 1:numel(row_families)
+            family = row_families{r};
             target_name = sprintf('%s-%s', family, agg);
             mi = find(strcmp(methods_names, target_name), 1);
 
-            for d = 1:n_data
+            if strcmp(family, 'IP-DAC')
+                row_class = ' class="ipdac"';
+            else
+                row_class = '';
+            end
+
+            fprintf(fid, '<tr%s>\n', row_class);
+
+            if r == 1
+                fprintf(fid, '<td class="aggcol" rowspan="%d">%s</td>\n', ...
+                    numel(row_families), html_escape(agg));
+            end
+
+            fprintf(fid, '<td class="methodcol">%s</td>\n', html_escape(family));
+
+            for d = 1:numel(datasets)
                 if isempty(mi)
-                    value_text{r,a,d} = '-';
+                    txt_raw = '-';
                 else
                     mv = mean_results(d, mi, met);
                     sv = std_results(d,  mi, met);
-                    value_text{r,a,d} = format_result_value(mv, sv, met);
+                    txt_raw = format_result_value(mv, sv, met);
                 end
-            end
-        end
-    end
 
-    %% --------------------- Write HTML table ---------------------
-
-    fprintf(fid, '<table>\n');
-
-    % First header row: aggregation names
-    fprintf(fid, '<tr>\n');
-    fprintf(fid, '<th class="rowhead"></th>\n');
-
-    for a = 1:n_agg
-        fprintf(fid, '<th class="agghead" colspan="%d">%s</th>\n', ...
-            n_data, html_escape(agg_list{a}));
-    end
-
-    fprintf(fid, '</tr>\n');
-
-    % Second header row: dataset names under each aggregation
-    fprintf(fid, '<tr>\n');
-    fprintf(fid, '<th class="rowhead">Method</th>\n');
-
-    for a = 1:n_agg
-        for d = 1:n_data
-            fprintf(fid, '<th class="datasethead">%s</th>\n', ...
-                html_escape(dataset_labels{d}));
-        end
-    end
-
-    fprintf(fid, '</tr>\n');
-
-    % Data rows
-    for r = 1:n_rows
-        fprintf(fid, '<tr>\n');
-        fprintf(fid, '<td class="rowhead">%s</td>\n', html_escape(row_families{r}));
-
-        for a = 1:n_agg
-            for d = 1:n_data
-                txt_raw = value_text{r,a,d};
                 txt = html_escape(txt_raw);
 
                 if strcmp(txt_raw, '-')
@@ -167,9 +133,9 @@ for met = 1:numel(metrics_names)
                     fprintf(fid, '<td>%s</td>\n', txt);
                 end
             end
-        end
 
-        fprintf(fid, '</tr>\n');
+            fprintf(fid, '</tr>\n');
+        end
     end
 
     fprintf(fid, '</table>\n');
@@ -178,7 +144,7 @@ end
 fprintf(fid, '</body>\n</html>\n');
 fclose(fid);
 
-fprintf('\nBig editable HTML tables saved to:\n%s\n', HtmlPath);
+fprintf('\nWord-friendly dataset-column HTML saved to:\n%s\n', HtmlPath);
 fprintf('Open this HTML file with browser or Microsoft Word, then copy/paste into your report.\n');
 
 %% ========================================================================
@@ -192,18 +158,14 @@ function value_text = format_result_value(mv, sv, met)
     end
 
     if met >= 5
-        % Communication and iteration columns: integer display.
-        % 0 is shown as '-'.
         if mv == 0 || isnan(mv)
             value_text = '-';
         else
             value_text = sprintf('%.0f', mv);
         end
     elseif met == 3 || met == 4
-        % Time
         value_text = sprintf('%.2f±%.2f', mv, sv);
     else
-        % SMSE / RMSE / MSLL etc.
         value_text = sprintf('%.4f±%.4f', mv, sv);
     end
 end
