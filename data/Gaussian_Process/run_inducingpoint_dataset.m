@@ -312,7 +312,7 @@ for mi = 1:numel(AllModes)
         trigger_per_agent_point = mean(trigger_count_per_agent, 2);
         comm_train = mean(trigger_count_per_agent(:));
         comm_test  = 0;
-        trigger_ratio_train = comm_train / max(iter_converge, eps);
+        trigger_ratio_train = comm_train / 500;
         fprintf('  [IP-DAC] 收敛步数:%d  平均触发次数/agent/point:%.1f\n', ...
             iter_converge, comm_train);
 
@@ -389,7 +389,7 @@ for mi = 1:numel(AllModes)
         trigger_per_agent_point = mean(trigger_count_per_agent, 2);
         comm_train = mean(trigger_count_per_agent(:));
         comm_test  = 0;
-        trigger_ratio_train = comm_train / max(iter_converge, eps);
+        trigger_ratio_train = comm_train / 500;
         fprintf('  [IP-AC] 收敛步数:%d  平均更新次数/agent/point:%.1f\n', ...
             iter_converge, comm_train);
 

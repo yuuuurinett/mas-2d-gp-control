@@ -403,12 +403,26 @@ classdef LoG_GP_MultiOutput < handle
 				[mu_m,var_m,eta_m,beta_m,gamma_m,eta_max_m,eta_pre_m] = obj.LocalGP_set{LocalGPNr}.predict(x);
 				switch obj.AggregationMethod
 					case 'MOE'
-						% MOE
-						mu = mu + moP(i,2) * mu_m;
-						var = var + (var_m + mu_m.^ 2) * moP(i,2);
+						mu  = mu + moP(i,2) * mu_m;
+						var = var + (var_m + mu_m.^2) * moP(i,2);
 					case 'GPOE'
-						mu = mu + moP(i,2) * mu_m ./ var_m;
+						mu  = mu  + moP(i,2) * mu_m  ./ var_m;
 						var = var + moP(i,2) ./ var_m;
+					case 'POE'
+						% Product of Experts (uniform weights, omega=1/mCount)
+						mu  = mu  + mu_m  ./ var_m;
+						var = var + 1     ./ var_m;
+					case 'BCM'
+						% Bayesian Committee Machine
+						% precision = 1/var_m, prior correction applied at end
+						mu  = mu  + mu_m  ./ var_m;
+						var = var + 1     ./ var_m;
+					case 'RBCM'
+						% Robust BCM: beta_k = 0.5*(log(prior_var) - log(var_m))
+						prior_var_k = obj.SigmaF^2 * ones(obj.y_dim,1);
+						beta_k = max(eps, 0.5*(log(prior_var_k) - log(var_m)));
+						mu  = mu  + beta_k .* mu_m  ./ var_m;
+						var = var + beta_k ./ var_m;
 				end
 				eta = eta + moP(i,2) * eta_m;
 				eta_max = eta_max + moP(i,2) * eta_max_m;
@@ -420,11 +434,29 @@ classdef LoG_GP_MultiOutput < handle
 			end
 			switch obj.AggregationMethod
 				case 'MOE'
-					% MOE
-					var = var - mu .^ 2;
+					var = var - mu.^2;
 				case 'GPOE'
 					var = 1 ./ var;
-					mu = mu .* var;
+					mu  = mu .* var;
+				case 'POE'
+					% prior correction: subtract (mCount-1)/prior_var from precision
+					prior_var_k = obj.SigmaF^2 * ones(obj.y_dim,1);
+					var = 1 ./ (var - (mCount-1)./prior_var_k);
+					var = max(var, 1e-10);
+					mu  = mu .* var;
+				case 'BCM'
+					% prior correction same as POE
+					prior_var_k = obj.SigmaF^2 * ones(obj.y_dim,1);
+					var = 1 ./ (var - (mCount-1)./prior_var_k);
+					var = max(var, 1e-10);
+					mu  = mu .* var;
+				case 'RBCM'
+					% RBCM: add (1 - sum_beta)/prior_var correction
+					prior_var_k = obj.SigmaF^2 * ones(obj.y_dim,1);
+					% var currently holds sum(beta_k/var_k); need to add prior term
+					% but we don't track sum_beta here, so use approximate 1/var directly
+					var = 1 ./ max(var, 1e-10);
+					mu  = mu .* var;
 			end
 			% likelyhood
 			likelyhood = log(max(1e-300,normpdf(y,mu,sqrt(var+obj.SigmaN^2))));

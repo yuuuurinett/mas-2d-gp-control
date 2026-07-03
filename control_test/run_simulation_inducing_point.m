@@ -1,115 +1,127 @@
 function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation)
-% Inducing-point online learning version requested by advisor:
-%   1) Zero offline samples: each LocalGP starts from the prior.
-%   2) No online data trigger: every agent adds one online sample at every time step.
-%   2b) Broadcast-level consensus trigger statistics are reported.
-%   2c) If ode45 fails to finish one sampling interval, stop and save debug data.
-%   3) Consensus communication ET is still kept:
-%      - DAC modes: dynamic average consensus ET through gp_masked_aggregation_update.
-%      - AC modes : static average consensus ET following the dataset IP-AC logic.
+% Pure inducing-point online-learning simulation.
 %
-% NOANCHOR VARIANT (diagnostic A/B test):
-%   use_initial_state_anchors is forced to false here. Everything else is
-%   identical to run_simulation_inducing_point.m. Use this to check whether
-%   the initial-state anchors are the cause of the ode45 integration failure.
+% Purpose of this version:
+%   Keep only the core algorithmic logic for advisor discussion.
 %
-% Modes:
-%   poe/gpoe/moe/bcm/rbcm       : IP-DAC + always-online data update
-%   poe_ac/gpoe_ac/...          : IP-AC  + always-online data update
-%   poe_direct                  : direct centralized IP aggregation debug, no DAC/AC consensus
-%   local                       : local GP + always-online data update
-%   exact                       : exact unknown dynamics, no GP learning
+% Core logic:
+%   1) Offline training data = 0.
+%   2) At every sampling instant t_k, each agent adds one online sample
+%          (x_i(t_k), y_i(t_k)),  y_i = UnknownScale*UnknownDynamics(x_i) + scaled noise.
+%      There is no lower-level learning event trigger.
+%   3) Every ProjectionUpdatePeriod steps, all LocalGPs are projected onto
+%      a fixed inducing-point set.
+%   4) The inducing-point statistics are aggregated by either IP-DAC or
+%      IP-AC using Kia et al. style asynchronous distributed event-triggered
+%      communication for connected undirected graphs.
+%   5) A shared MaskedGP is rebuilt from the final consensus state.
+%   6) For inducing-point modes, the controller always uses this shared
+%      inducing-point MaskedGP prediction. There is no shadow/local switch.
+%
+% Supported modes:
+%   poe, gpoe, moe, bcm, rbcm                 : IP-DAC
+%   poe_ac, gpoe_ac, moe_ac, bcm_ac, rbcm_ac : IP-AC
+%   local                                    : LocalGP only baseline
+%   exact                                    : exact unknown dynamics baseline
+%
+% Note:
+%   This file assumes that gp_masked_aggregation_init and the decoder below
+%   use the same row layout for P / Xi_final as in the dataset code.
+
+fprintf('Using PURE_SCALED_UNKNOWN_KIA_IPCONTROL.\n');
 
 if nargin < 4
     use_formation = true;
 end
+if nargin < 2 || isempty(SaveFolderName)
+    SaveFolderName = '';
+end
+if nargin < 3 || isempty(SaveFileName)
+    SaveFileName = '';
+end
+if ~isempty(SaveFolderName) && ~isfolder(SaveFolderName)
+    mkdir(SaveFolderName);
+end
 
 rng(0);
 
-%% 1. System Parameters
+%% Fixed algorithm parameters
+ProjectionUpdatePeriod = 50;     % 50 steps with dt=0.01 -> refresh every 0.5 s
+ConsensusMaxIter = 3000;
+ConsensusTol = 1e-5;
+
+% Scaling test suggested for numerical robustness.
+% UnknownScale scales the unknown dynamics used for GP labels and prediction-error evaluation
+% in this script. If your physical dynamics function internally calls
+% Manipulator_2D_2DoF_UnknownDynamics, apply the same scale inside that function as well
+% for a fully consistent scaled-plant experiment.
+UnknownScale = 0.1;
+DisturbanceScale = 0.1;
+
+%% 1. System parameters
 SystemOrder = 2;
 q_dim = 2;
 x_dim = q_dim * SystemOrder;
+y_dim = q_dim;
 
 m1 = 1;
 m2 = 1;
 L1 = 1;
 L2 = 1;
-g  = 9.8; 
-
 AgentQuantity = 6;
 LeaderQuantity = 1;
 
 %% 2. Topology
 MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(AgentQuantity, LeaderQuantity);
-
 L = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 B = MultiAgentSystem.Agent_Leader_Topology.ConnectionMatrix(:,1);
+L_lap = L;
+N_degree = sum(L_lap < 0, 2);
 
-%% 3. Controller Parameters
+%% 3. Controller parameters
 c = 10;
 lambda_set = [1; 1];
-Fl = 0.25;
-
 lambda_n = lambda_set(end);
 lambda_vector = lambda_set(1:SystemOrder-1);
 
 Lambda = [zeros(SystemOrder-2,1), eye(SystemOrder-2); ...
           -lambda_set(1)/lambda_n, -lambda_set(2:end-1)/lambda_n];
 
-% Pe & Qe
 Qes = eye(SystemOrder-1);
 Pes = care(Lambda, [], Qes);
 Pe  = kron(Pes, eye(AgentQuantity));
-Qe  = kron(Qes, eye(AgentQuantity));
+Qe  = kron(Qes, eye(AgentQuantity)); %#ok<NASGU>
 
-% Pr & Qr
 q  = (L + diag(B)) \ ones(AgentQuantity,1);
 Pr = diag(1./q);
 Qr = Pr*(L+diag(B)) + (L+diag(B))'*Pr;
 
-% Pz & Qz
-Pz = blkdiag(Pr, Pe);
-eig_Pz = eig(Pz);
-max_eig_Pz = max(eig_Pz);
-min_eig_Pz = min(eig_Pz);
-
 t_vec = [zeros(SystemOrder-2,1); 1/lambda_n];
-
 Phi = Pr * kron(lambda_vector' * t_vec, eye(AgentQuantity));
 Psi = Pr * kron(lambda_vector' * Lambda, eye(AgentQuantity)) + ...
       kron(t_vec' * Pes, eye(AgentQuantity));
+Qz = [c*lambda_n*Qr - 2*Phi, -Psi; -Psi', Pe];
 
-Qz = [c*lambda_n*Qr - 2*Phi, -Psi; ...
-      -Psi', Qe];
-
-eig_Qz = eig(Qz);
-min_eig_Qz = min(eig_Qz);
-
-if all(real(eig_Qz) > 0) && all(real(eig(Lambda)) < 0)
+if all(real(eig(Qz)) > 0) && all(real(eig(Lambda)) < 0)
     fprintf('The controller is stable!\n');
 else
-    error('Controller is not stable!');
+    error('Controller is not stable.');
 end
 
-xi = 2 * lambda_n / min_eig_Qz * norm(Pr * (L + diag(B)));
-chi = sqrt((1 + norm([t_vec, Lambda])^2) * max_eig_Pz / min_eig_Pz) * ...
-       norm(inv(L + diag(B)));
-
 %% 4. Time
+% For advisor discussion, keep this normal 10 s horizon. For debugging, you
+% can temporarily change it to 1 or 2.
 t_start = 0;
 t_end = 10;
 t_step = 0.01;
-
 t_set = t_start:t_step:t_end;
 T = numel(t_set);
 
-%% 5. Reference Trajectory
+%% 5. Reference trajectory and formation offsets
 [xl_set, xlr_set, ~] = Manipulator_2D_2DoF_LeaderDynamics(t_set, L1);
 
 s_all_set  = nan(x_dim*AgentQuantity, T);
 sr_all_set = nan(q_dim*AgentQuantity, T);
-
 for AgentNr = 1:AgentQuantity
     [s_all_set((AgentNr-1)*x_dim+(1:x_dim),:), ...
      sr_all_set((AgentNr-1)*q_dim+(1:q_dim),:)] = ...
@@ -121,210 +133,94 @@ if ~use_formation
     sr_all_set = zeros(size(sr_all_set));
 end
 
-%% 6. Local GPs
+%% 6. LocalGPs: zero offline data
 SigmaF = 1;
 SigmaL = 0.5 * ones(x_dim,1);
-
+SigmaN = 0.01;
 GP_tau = 1e-8;
 GP_delta = 0.1;
-y_dim = q_dim;
-LocalGP_Quantity = AgentQuantity;
-
 DomainScale = 1.5;
 X_min = DomainScale * [-1,-1,-1,-1];
 X_max = DomainScale * [ 1, 1, 1, 1];
 
-MaxDataQuantity_set = 50 * ones(AgentQuantity,1);
-SigmaN_set = 0.01 * ones(AgentQuantity,1);
+MaxDataQuantity = 600;
+OfflineDataQuantity = 0;
 
-dac_methods = {'poe','gpoe','moe','bcm','rbcm'};
-ac_methods  = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};
-direct_methods = {'poe_direct','gpoe_direct','moe_direct','bcm_direct','rbcm_direct'};
-
-mode_lower = lower(CurrentMode);
-is_direct_mode = ismember(mode_lower, direct_methods);
-
-OfflineDataQuantity_set = zeros(AgentQuantity, 1);
-
-LocalGP_set = cell(LocalGP_Quantity, 1);
-
-for LocalGP_Nr = 1:LocalGP_Quantity
-    MaxDataQuantity = MaxDataQuantity_set(LocalGP_Nr);
-    OfflineDataQuantity = OfflineDataQuantity_set(LocalGP_Nr);
-    SigmaN = SigmaN_set(LocalGP_Nr);
-
-    LocalGP_set{LocalGP_Nr} = LocalGP_MultiOutput( ...
-        x_dim, y_dim, MaxDataQuantity, SigmaN, SigmaF, SigmaL);
-
-    if OfflineDataQuantity > 0
-        X_in = 2*(rand(x_dim, OfflineDataQuantity)-0.5)*DomainScale;
-        Y_in = Manipulator_2D_2DoF_UnknownDynamics(X_in);
-        Y_in = Y_in + SigmaN * randn(size(Y_in));
-
-        LocalGP_set{LocalGP_Nr}.add_Alldata(X_in, Y_in);
-    end
-    LocalGP_set{LocalGP_Nr}.tau   = GP_tau;
-    LocalGP_set{LocalGP_Nr}.delta = GP_delta;
-    LocalGP_set{LocalGP_Nr}.xMax  = X_max;
-    LocalGP_set{LocalGP_Nr}.xMin  = X_min;
+LocalGP_set = cell(AgentQuantity, 1);
+for AgentNr = 1:AgentQuantity
+    LocalGP_set{AgentNr} = LocalGP_MultiOutput(x_dim, y_dim, MaxDataQuantity, ...
+        SigmaN, SigmaF, SigmaL);
+    LocalGP_set{AgentNr}.tau   = GP_tau;
+    LocalGP_set{AgentNr}.delta = GP_delta;
+    LocalGP_set{AgentNr}.xMax  = X_max;
+    LocalGP_set{AgentNr}.xMin  = X_min;
 end
 
-%% 7. Online Data Update Setting
-online_learning_modes = [dac_methods, ac_methods, direct_methods, {'local'}];
+fprintf('Offline data: %d per agent. Online update: every sampling step.\n', OfflineDataQuantity);
+fprintf('UnknownScale = %.3f, DisturbanceScale = %.3f.\n', UnknownScale, DisturbanceScale);
 
-%% 8. Initial State and First Online Sample at t = 0
+%% 7. Mode and inducing-point setup
+mode_lower = lower(CurrentMode);
+dac_methods = {'poe','gpoe','moe','bcm','rbcm'};
+ac_methods  = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};
+
+is_dac_mode = ismember(mode_lower, dac_methods);
+is_ac_mode  = ismember(mode_lower, ac_methods);
+is_ip_mode  = is_dac_mode || is_ac_mode;
+is_local_mode = strcmpi(mode_lower, 'local');
+is_exact_mode = strcmpi(mode_lower, 'exact');
+
+if is_dac_mode
+    base_method = mode_lower;
+elseif is_ac_mode
+    base_method = strrep(mode_lower, '_ac', '');
+elseif is_local_mode || is_exact_mode
+    base_method = mode_lower;
+else
+    error('Unknown mode: %s', CurrentMode);
+end
+
+Kappa_P = 1;
+NumInducingPoints = 400;
+InducingPoints_Coordinates = 2*DomainScale*rand(x_dim, NumInducingPoints) - DomainScale;
+
+% Kia et al. connected-undirected-graph trigger parameter.
+epsilon_i = 0.04 * ones(AgentQuantity, 1);
+
+%% 8. Initial state
 rng(42);
-
 x_all = rand(x_dim*AgentQuantity, 1);
-
 x_all_set = nan(x_dim*AgentQuantity, T);
 x_all_set(:,1) = x_all;
 
 vartheta_all_set = nan(x_dim*AgentQuantity, T);
-vartheta_all_set(:,1) = x_all - s_all_set(:,1) - ...
-    kron(ones(AgentQuantity,1), xl_set(:,1));
+vartheta_all_set(:,1) = x_all - s_all_set(:,1) - kron(ones(AgentQuantity,1), xl_set(:,1));
 
-f_hat_matrix  = zeros(y_dim, AgentQuantity);
+TrackingError_vector = zeros(1,T);
+f_hat_matrix = zeros(y_dim, AgentQuantity);
 f_true_matrix = zeros(y_dim, AgentQuantity);
 
-TrackingError_vector = zeros(1, T);
-
-f_hat_all_set  = nan(y_dim, AgentQuantity, T);
-f_true_all_set = nan(y_dim, AgentQuantity, T);
-
-state_norm_vector            = nan(1, T);
-u_norm_vector                = nan(1, T-1);
-f_hat_norm_vector            = nan(1, T);
-f_true_norm_vector           = nan(1, T);
-prediction_error_norm_vector = nan(1, T);
-gp_used_vector               = false(1, T);
-
-online_update_set   = zeros(AgentQuantity, T);
-online_update_count = zeros(AgentQuantity, 1);
-
-x_all_matrix_0 = reshape(x_all_set(:,1), x_dim, AgentQuantity);
-
-if ismember(mode_lower, online_learning_modes)
-    online_update_set(:,1) = 1;
-
-    for AgentNr = 1:AgentQuantity
-        x_i_0 = x_all_matrix_0(:, AgentNr);
-
-        y_i_0 = Manipulator_2D_2DoF_UnknownDynamics(x_i_0) + ...
-                LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
-
-        LocalGP_set{AgentNr}.addPoint(x_i_0, y_i_0);
-        online_update_count(AgentNr) = online_update_count(AgentNr) + 1;
-    end
-end
-
-%% 9. Inducing Points & Aggregation Init
-Kappa_P = 1;
-NumBaseInducingPoints = 400;
-InducingPoints_Coordinates = 2*DomainScale*rand(x_dim, NumBaseInducingPoints) - DomainScale;
-
-% -------------------------------------------------------------------------
-% NOANCHOR VARIANT: anchors disabled for this A/B diagnostic test.
-% -------------------------------------------------------------------------
-use_initial_state_anchors = false;
-initial_state_anchors = [];
-
-if use_initial_state_anchors
-    initial_state_anchors = x_all_matrix_0;
-    InducingPoints_Coordinates = [InducingPoints_Coordinates, initial_state_anchors];
-end
-
-NumInducingPoints = size(InducingPoints_Coordinates, 2);
-L_lap = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
-
-fprintf('[NOANCHOR] Inducing points: base = %d, initial anchors = %d, total = %d\n', ...
-    NumBaseInducingPoints, size(initial_state_anchors,2), NumInducingPoints);
-
-N_degree = sum(L_lap < 0, 2);
-N_max = max(N_degree);
-a_param = 0.5 / N_max;
-sigma_i_dac = 0.5;
-sigma_i_ac  = 0.5;
+prediction_error_norm_vector = nan(1,T);
+online_update_count = zeros(AgentQuantity,1);
+projection_update_set = zeros(1,T);
 
 MaskedGP = [];
+Xi_final = [];
 P_inducing = [];
 p_dim = [];
 
-Zeta_vector_inducing = [];
-Zeta_last_trigger = [];
-dac_total_broadcast_count = zeros(AgentQuantity, 1);
-dac_total_trigger_count = dac_total_broadcast_count;
-neighbor_count_per_agent = sum(L_lap < 0, 2);
-
-Xi_ac = [];
-Xi_last_trigger_ac = [];
-
-ac_total_broadcast_count = zeros(AgentQuantity, 1);
-ac_total_point_count     = zeros(AgentQuantity, NumInducingPoints);
-
-ac_total_trigger_count = ac_total_broadcast_count;
-
-if ismember(mode_lower, dac_methods)
-    base_method = mode_lower;
-
-    warning_state_gp_init = warning('off','all');
-    [P_inducing, p_dim] = gp_masked_aggregation_init( ...
-        LocalGP_set, AgentQuantity, NumInducingPoints, ...
-        InducingPoints_Coordinates, base_method);
-    warning(warning_state_gp_init);
-
-    Zeta_vector_inducing = zeros(p_dim, AgentQuantity, NumInducingPoints);
-    Zeta_last_trigger = P_inducing;
-
-    [MaskedGP, Zeta_vector_inducing, Zeta_last_trigger, ~] = ...
-        gp_masked_aggregation_update( ...
-        P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
-        NumInducingPoints, 0, InducingPoints_Coordinates, ...
-        SigmaF, SigmaL, x_dim, base_method, p_dim, ...
-        Zeta_last_trigger, neighbor_count_per_agent);
-
-elseif is_direct_mode
-    base_method = strrep(mode_lower, '_direct', '');
-
-    warning_state_gp_init = warning('off','all');
-    [P_inducing, p_dim] = gp_masked_aggregation_init( ...
-        LocalGP_set, AgentQuantity, NumInducingPoints, ...
-        InducingPoints_Coordinates, base_method);
-    warning(warning_state_gp_init);
-
-    P_direct = repmat(mean(P_inducing, 2), [1, AgentQuantity, 1]);
-    MaskedGP = build_maskedgp_from_consensus_state( ...
-        P_direct, base_method, AgentQuantity, NumInducingPoints, ...
-        p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
-
-elseif ismember(mode_lower, ac_methods)
-    base_method = strrep(mode_lower, '_ac', '');
-
-    warning_state_gp_init = warning('off','all');
-    [P_inducing, p_dim] = gp_masked_aggregation_init( ...
-        LocalGP_set, AgentQuantity, NumInducingPoints, ...
-        InducingPoints_Coordinates, base_method);
-    warning(warning_state_gp_init);
-
-    Xi_ac = P_inducing;
-    Xi_last_trigger_ac = P_inducing;
-
-    [MaskedGP, Xi_ac, Xi_last_trigger_ac, ~, ~] = ...
-        gp_masked_aggregation_ac_et_update( ...
-        Xi_ac, Xi_last_trigger_ac, L_lap, Kappa_P, AgentQuantity, ...
-        NumInducingPoints, 0, InducingPoints_Coordinates, ...
-        SigmaF, SigmaL, x_dim, base_method, p_dim, ...
-        N_degree, a_param, sigma_i_ac);
-
-elseif strcmpi(mode_lower, 'local') || strcmpi(mode_lower, 'offline') || strcmpi(mode_lower, 'exact')
-    base_method = mode_lower;
-else
-    error('Unknown CurrentMode: %s', CurrentMode);
+fprintf('Mode: %s. Projection refresh every %d steps.\n', CurrentMode, ProjectionUpdatePeriod);
+if is_ip_mode
+    fprintf('Control source: shared inducing-point MaskedGP.\n');
+elseif is_local_mode
+    fprintf('Control source: LocalGP baseline.\n');
+elseif is_exact_mode
+    fprintf('Control source: exact unknown dynamics.\n');
 end
 
-%% 11. Control Loop
-opts = odeset('RelTol', 1e-2, 'AbsTol', 1e-2, 'MaxStep', t_step);
-tic;
+%% 9. Main loop
+opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);
+elapsed_tic = tic;
 
 for t_Nr = 1:T-1
     t = t_set(t_Nr);
@@ -332,7 +228,6 @@ for t_Nr = 1:T-1
     x_l_r = xlr_set(:, t_Nr);
     x_all = x_all_set(:, t_Nr);
     x_all_matrix = reshape(x_all, x_dim, AgentQuantity);
-
     x_all_cell = ET_MAS_GP_Leader_vector2cell(x_all, AgentQuantity, 1);
 
     s_all = s_all_set(:, t_Nr);
@@ -344,412 +239,282 @@ for t_Nr = 1:T-1
 
     vartheta_all = vartheta_all_set(:, t_Nr);
     vartheta_cell = ET_MAS_GP_Leader_vector2cell(vartheta_all, AgentQuantity, SystemOrder);
-
     TrackingError_vector(t_Nr) = norm(vartheta_all);
-    state_norm_vector(t_Nr) = norm(x_all);
 
-    %% 11.1 Consensus law for controller
-    [phi_cell, r_matrix, e_cell] = Manipulator_2D_2DoF_ConsensusLaw( ...
-        vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
-
-    %% 11.2 Prediction using current model
-    if ismember(mode_lower, dac_methods) || ismember(mode_lower, ac_methods) || is_direct_mode
-        for n = 1:AgentQuantity
-            [mu_hat,~] = MaskedGP{n}.predict(x_all_matrix(:,n));
-            f_hat_matrix(:,n) = max(-30, min(30, mu_hat));
-        end
-
-    elseif strcmpi(mode_lower, 'local') || strcmpi(mode_lower, 'offline')
-        for n = 1:AgentQuantity
-            [mu_hat,~] = LocalGP_set{n}.predict(x_all_matrix(:,n));
-            f_hat_matrix(:,n) = max(-30, min(30, mu_hat));
-        end
-
-    elseif strcmpi(mode_lower, 'exact')
-        for n = 1:AgentQuantity
-            f_hat_matrix(:,n) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix(:,n));
-        end
-    end
-
-    gp_used_vector(t_Nr) = ismember(mode_lower, [dac_methods, ac_methods, direct_methods, {'local','offline','exact'}]);
-
-    %% 11.3 Record prediction and true dynamics
-    for n = 1:AgentQuantity
-        f_true_matrix(:,n) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix(:,n));
-    end
-
-    f_hat_all_set(:,:,t_Nr)  = f_hat_matrix;
-    f_true_all_set(:,:,t_Nr) = f_true_matrix;
-
-    f_hat_norm_vector(t_Nr)            = norm(f_hat_matrix(:));
-    f_true_norm_vector(t_Nr)           = norm(f_true_matrix(:));
-    prediction_error_norm_vector(t_Nr) = norm(f_true_matrix(:) - f_hat_matrix(:));
-
-    %% 11.4 Control input and system simulation
-    u_cell = Manipulator_2D_2DoF_get_u_cell( ...
-        x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
-
-    u_flat = [];
-    for AgentNr = 1:AgentQuantity
-        u_flat = [u_flat; u_cell{AgentNr}(:)]; %#ok<AGROW>
-    end
-    u_norm_vector(t_Nr) = norm(u_flat);
-
-    [t_ode, x_all_temp] = ode45( ...
-        @(t,x) Manipulator_2D_2DoF_MultiAgent_DynamicFunction(t, x, u_cell, L1, L2, m1, m2), ...
-        [t, t+t_step], x_all, opts);
-
-    if isempty(t_ode) || t_ode(end) < t + t_step - 1e-10
-        if ~exist(SaveFolderName,'dir')
-            mkdir(SaveFolderName);
-        end
-
-        debug_file = fullfile(SaveFolderName, [SaveFileName, '_ODE_FAIL_DEBUG.mat']);
-
-        save(debug_file, ...
-            'CurrentMode', 't_Nr', 't', 't_step', 't_set', ...
-            'x_all', 'x_all_matrix', 'x_all_temp', 't_ode', ...
-            'u_cell', 'u_flat', 'f_hat_matrix', 'f_true_matrix', ...
-            'TrackingError_vector', 'vartheta_all_set', 'x_all_set', ...
-            'state_norm_vector', 'u_norm_vector', ...
-            'f_hat_norm_vector', 'f_true_norm_vector', ...
-            'prediction_error_norm_vector', ...
-            'online_update_set', 'online_update_count', ...
-            'LocalGP_set', 'MaskedGP', ...
-            'P_inducing', 'Zeta_vector_inducing', 'Zeta_last_trigger', ...
-            'Xi_ac', 'Xi_last_trigger_ac', ...
-            'dac_total_broadcast_count', 'ac_total_broadcast_count');
-
-        error('ode45 failed at t = %.6f. Debug data saved to: %s', t, debug_file);
-    end
-
-    x_all_next = x_all_temp(end,:)';
-    x_all_set(:, t_Nr+1) = x_all_next;
-
-    vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
-        kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
-
-    %% 11.5 Online data update layer: always add one sample per agent
-    any_online_update = false;
-    updated_agents = [];
-
-    if ismember(mode_lower, online_learning_modes)
-        online_update_set(:, t_Nr+1) = 1;
-        x_all_next_matrix = reshape(x_all_next, x_dim, AgentQuantity);
-
+    %% 9.1 Time-triggered LocalGP online update
+    if is_ip_mode || is_local_mode
         for AgentNr = 1:AgentQuantity
-            x_i = x_all_next_matrix(:, AgentNr);
-
-            y_i = Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
-                  LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
+            x_i = x_all_matrix(:,AgentNr);
+            y_i = UnknownScale * Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
+                  DisturbanceScale * LocalGP_set{AgentNr}.SigmaN * randn(y_dim,1);
 
             if LocalGP_set{AgentNr}.DataQuantity >= LocalGP_set{AgentNr}.MaxDataQuantity
                 LocalGP_set{AgentNr}.downdateParam(1);
             end
-
             LocalGP_set{AgentNr}.addPoint(x_i, y_i);
-
             online_update_count(AgentNr) = online_update_count(AgentNr) + 1;
-            any_online_update = true;
-            updated_agents = [updated_agents; AgentNr]; %#ok<AGROW>
         end
     end
 
-    %% 11.6 Aggregation update layer for next step
-    if ismember(mode_lower, dac_methods)
-        if any_online_update
-            for updatedAgentIdx = 1:numel(updated_agents)
-                UpdatedAgentNr = updated_agents(updatedAgentIdx);
+    %% 9.2 Inducing-point projection and Kia ET consensus
+    if is_ip_mode && (t_Nr == 1 || mod(t_Nr-1, ProjectionUpdatePeriod) == 0)
+        projection_update_set(t_Nr) = 1;
 
-                P_inducing = recompute_P_single_agent( ...
-                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
-                    NumInducingPoints, InducingPoints_Coordinates, ...
-                    AgentQuantity, base_method);
-            end
+        [P_inducing, p_dim] = gp_masked_aggregation_init( ...
+            LocalGP_set, AgentQuantity, NumInducingPoints, ...
+            InducingPoints_Coordinates, base_method);
+
+        if is_dac_mode
+            Xi_final = ip_dac_consensus_kia(P_inducing, L_lap, Kappa_P, t_step, ...
+                ConsensusMaxIter, ConsensusTol, N_degree, epsilon_i);
+        else
+            Xi_final = ip_ac_consensus_kia(P_inducing, L_lap, Kappa_P, t_step, ...
+                ConsensusMaxIter, ConsensusTol, N_degree, epsilon_i);
         end
 
-        [MaskedGP_new, Zeta_vector_inducing, Zeta_last_trigger, dac_step_triggers] = ...
-            gp_masked_aggregation_update( ...
-            P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
-            NumInducingPoints, t_step, InducingPoints_Coordinates, ...
-            SigmaF, SigmaL, x_dim, base_method, p_dim, ...
-            Zeta_last_trigger, neighbor_count_per_agent);
+        MaskedGP = build_shared_maskedgp_from_xi(Xi_final, base_method, AgentQuantity, ...
+            NumInducingPoints, p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
 
-        if any(dac_step_triggers)
-            MaskedGP = MaskedGP_new;
-        end
-
-        dac_total_broadcast_count = dac_total_broadcast_count + dac_step_triggers;
-        dac_total_trigger_count = dac_total_broadcast_count;
-
-    elseif is_direct_mode
-        if any_online_update
-            for updatedAgentIdx = 1:numel(updated_agents)
-                UpdatedAgentNr = updated_agents(updatedAgentIdx);
-
-                P_inducing = recompute_P_single_agent( ...
-                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
-                    NumInducingPoints, InducingPoints_Coordinates, ...
-                    AgentQuantity, base_method);
-            end
-        end
-
-        P_direct = repmat(mean(P_inducing, 2), [1, AgentQuantity, 1]);
-        MaskedGP = build_maskedgp_from_consensus_state( ...
-            P_direct, base_method, AgentQuantity, NumInducingPoints, ...
-            p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
-
-    elseif ismember(mode_lower, ac_methods)
-        if any_online_update
-            for updatedAgentIdx = 1:numel(updated_agents)
-                UpdatedAgentNr = updated_agents(updatedAgentIdx);
-
-                P_inducing = recompute_P_single_agent( ...
-                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
-                    NumInducingPoints, InducingPoints_Coordinates, ...
-                    AgentQuantity, base_method);
-            end
-
-            Xi_ac = P_inducing;
-            Xi_last_trigger_ac = P_inducing;
-        end
-
-        [MaskedGP, Xi_ac, Xi_last_trigger_ac, ...
-         ac_step_broadcast_triggers, ac_step_point_triggers] = ...
-            gp_masked_aggregation_ac_et_update( ...
-            Xi_ac, Xi_last_trigger_ac, L_lap, Kappa_P, AgentQuantity, ...
-            NumInducingPoints, t_step, InducingPoints_Coordinates, ...
-            SigmaF, SigmaL, x_dim, base_method, p_dim, ...
-            N_degree, a_param, sigma_i_ac);
-
-        ac_total_broadcast_count = ...
-            ac_total_broadcast_count + ac_step_broadcast_triggers;
-
-        ac_total_point_count = ...
-            ac_total_point_count + ac_step_point_triggers;
-
-        ac_total_trigger_count = ac_total_broadcast_count;
+        fprintf('Projection update at t = %.2f, MaskedGP data = %d.\n', t, MaskedGP.DataQuantity);
     end
 
-    fprintf('t = %6.4f\n', t);
+    %% 9.3 Consensus law for tracking controller
+    [phi_cell, ~, ~] = Manipulator_2D_2DoF_ConsensusLaw( ...
+        vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
+
+    %% 9.4 Prediction used by controller
+    if is_ip_mode
+        if isempty(MaskedGP) || MaskedGP.DataQuantity == 0
+            error('MaskedGP has not been initialized before control prediction.');
+        end
+        for AgentNr = 1:AgentQuantity
+            [mu_hat, ~] = MaskedGP.predict(x_all_matrix(:,AgentNr));
+            mu_hat(~isfinite(mu_hat)) = 0;
+            f_hat_matrix(:,AgentNr) = real(mu_hat);
+        end
+
+    elseif is_local_mode
+        for AgentNr = 1:AgentQuantity
+            [mu_hat, ~] = LocalGP_set{AgentNr}.predict(x_all_matrix(:,AgentNr));
+            mu_hat(~isfinite(mu_hat)) = 0;
+            f_hat_matrix(:,AgentNr) = real(mu_hat);
+        end
+
+    elseif is_exact_mode
+        for AgentNr = 1:AgentQuantity
+            f_hat_matrix(:,AgentNr) = UnknownScale * ...
+                Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix(:,AgentNr));
+        end
+    end
+
+    for AgentNr = 1:AgentQuantity
+        f_true_matrix(:,AgentNr) = UnknownScale * ...
+            Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix(:,AgentNr));
+    end
+    prediction_error_norm_vector(t_Nr) = norm(f_true_matrix(:) - f_hat_matrix(:));
+
+    %% 9.5 Control and physical dynamics
+    u_cell = Manipulator_2D_2DoF_get_u_cell( ...
+        x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
+
+    [t_ode, x_all_temp] = ode45( ...
+        @(current_time,current_state) Manipulator_2D_2DoF_MultiAgent_DynamicFunction( ...
+            current_time, current_state, u_cell, L1, L2, m1, m2), ...
+        [t, t+t_step], x_all, opts);
+
+    if isempty(t_ode) || t_ode(end) < t + t_step - 1e-10
+        if ~isempty(SaveFolderName)
+            debug_file = fullfile(SaveFolderName, [SaveFileName, '_ODE_FAIL_DEBUG.mat']);
+            save(debug_file, 'CurrentMode', 't_Nr', 't', 'x_all', 'x_all_matrix', ...
+                'u_cell', 'f_hat_matrix', 'f_true_matrix', 'P_inducing', 'Xi_final', ...
+                'MaskedGP', 'LocalGP_set', 'InducingPoints_Coordinates', ...
+                'prediction_error_norm_vector');
+            error('ode45 failed at t = %.6f. Debug data saved to: %s', t, debug_file);
+        else
+            error('ode45 failed at t = %.6f.', t);
+        end
+    end
+
+    x_all_next = x_all_temp(end,:)';
+    x_all_set(:, t_Nr+1) = x_all_next;
+    vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
+        kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
+
+    if mod(t_Nr,100) == 0
+        elapsed_now = toc(elapsed_tic);
+        progress_ratio = t_Nr / (T-1);
+        estimated_total_time = elapsed_now / max(progress_ratio, eps);
+        estimated_remaining_time = estimated_total_time - elapsed_now;
+        %% Print Time
+	    fprintf('t = %6.4f\n',t);
+
+        fprintf(['t = %.2f / %.2f s, progress = %.1f%%, ', ...
+                 'tracking error = %.4f, prediction error = %.4f, ', ...
+                 'elapsed = %.1f min, remaining ≈ %.1f min\n'], ...
+            t, t_end, 100*progress_ratio, ...
+            TrackingError_vector(t_Nr), prediction_error_norm_vector(t_Nr), ...
+            elapsed_now/60, estimated_remaining_time/60);
+    end
 end
 
 TrackingError_vector(end) = norm(vartheta_all_set(:,end));
-state_norm_vector(end) = norm(x_all_set(:,end));
-
-%% 12. Final Record and Statistics
-
-TrackingError_vector(end) = norm(vartheta_all_set(:,end));
-
-x_all_matrix_end = reshape(x_all_set(:,end), x_dim, AgentQuantity);
-
-for n = 1:AgentQuantity
-    f_true_all_set(:,n,end) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix_end(:,n));
-    f_hat_all_set(:,n,end)  = f_hat_matrix(:,n);
-end
-f_hat_norm_vector(end)            = norm(f_hat_all_set(:,:,end), 'fro');
-f_true_norm_vector(end)           = norm(f_true_all_set(:,:,end), 'fro');
-prediction_error_norm_vector(end) = norm(f_true_all_set(:,:,end) - f_hat_all_set(:,:,end), 'fro');
-gp_used_vector(end)               = gp_used_vector(end-1);
-
-elapsed_time = toc;
+elapsed_time = toc(elapsed_tic);
 
 fprintf('\n==================================================\n');
-fprintf('Mode: %s [NOANCHOR]\n', CurrentMode);
-fprintf('Formation: %d\n', use_formation);
-fprintf('Initial-state inducing anchors: %d\n', use_initial_state_anchors);
+fprintf('Mode: %s\n', CurrentMode);
 fprintf('Total simulation time: %.2f s\n', elapsed_time);
 fprintf('Final tracking error: %.6f\n', TrackingError_vector(end));
-
-dac_trigger_count_per_agent        = 0;
-dac_trigger_count_per_agent_point  = 0;
-ac_trigger_count_per_agent         = 0;
-ac_trigger_count_per_agent_point   = 0;
-dac_trigger_rate_percent           = 0;
-ac_trigger_rate_percent            = 0;
-
-[max_tracking_error, max_tracking_idx] = max(TrackingError_vector);
-[max_state_norm, max_state_idx] = max(state_norm_vector);
-[max_u_norm, max_u_idx] = max(u_norm_vector);
-[max_pred_err, max_pred_idx] = max(prediction_error_norm_vector);
-
-if ismember(lower(CurrentMode), dac_methods)
-    dac_trigger_count_per_agent = mean(dac_total_broadcast_count);
-    dac_trigger_rate_percent = dac_trigger_count_per_agent / (T-1) * 100;
-    dac_trigger_count_per_agent_point = dac_trigger_count_per_agent / NumInducingPoints;
-
-    fprintf('\nDAC consensus ET:\n');
-    fprintf('  Communication triggers: %.2f / agent (%.2f%% of steps)\n', ...
-        dac_trigger_count_per_agent, dac_trigger_rate_percent);
-
-elseif ismember(lower(CurrentMode), ac_methods)
-    ac_trigger_count_per_agent = mean(ac_total_broadcast_count);
-    ac_trigger_rate_percent = ac_trigger_count_per_agent / (T-1) * 100;
-    ac_trigger_count_per_agent_point = ...
-        mean(sum(ac_total_point_count, 2)) / NumInducingPoints;
-
-    fprintf('\nAC consensus ET:\n');
-    fprintf('  Communication triggers: %.2f / agent (%.2f%% of steps)\n', ...
-        ac_trigger_count_per_agent, ac_trigger_rate_percent);
-
-elseif is_direct_mode
-    fprintf('\nDirect IP aggregation diagnostic:\n');
-    fprintf('  DAC/AC consensus layer bypassed. Communication triggers: 0.00 / agent\n');
+fprintf('Online updates: %.0f / agent\n', mean(online_update_count));
+fprintf('UnknownScale: %.3f, DisturbanceScale: %.3f\n', UnknownScale, DisturbanceScale);
+fprintf('Projection updates: %d\n', sum(projection_update_set));
+if any(isfinite(prediction_error_norm_vector))
+    [max_pred_err, idx] = max(prediction_error_norm_vector);
+    fprintf('Max controller prediction error: %.6f at t=%.4f\n', max_pred_err, t_set(idx));
 end
-
-fprintf('\nTracking diagnostics:\n');
-fprintf('  Max tracking error: %.6f at t = %.4f\n', ...
-    max_tracking_error, t_set(max_tracking_idx));
-fprintf('  Max state norm: %.6f at t = %.4f\n', ...
-    max_state_norm, t_set(max_state_idx));
-fprintf('  Max control norm: %.6f at t = %.4f\n', ...
-    max_u_norm, t_set(max_u_idx));
-fprintf('  Max prediction error norm: %.6f at t = %.4f\n', ...
-    max_pred_err, t_set(max_pred_idx));
 fprintf('==================================================\n');
-%% 13. Save
-if nargin >= 3
-    if ~exist(SaveFolderName,'dir')
-        mkdir(SaveFolderName);
-    end
 
-    save(fullfile(SaveFolderName,[SaveFileName,'.mat']), ...
-        't_set', ...
-        'TrackingError_vector', ...
-        'CurrentMode', ...
-        'use_formation', ...
-        'mode_lower', ...
-        'base_method', ...
-        'is_direct_mode', ...
-        'f_hat_all_set', ...
-        'f_true_all_set', ...
-        'vartheta_all_set', ...
-        'online_update_set', ...
-        'online_update_count', ...
-        'dac_total_trigger_count', ...
-        'dac_total_broadcast_count', ...
-        'dac_trigger_count_per_agent', ...
-        'dac_trigger_rate_percent', ...
-        'dac_trigger_count_per_agent_point', ...
-        'ac_total_trigger_count', ...
-        'ac_total_broadcast_count', ...
-        'ac_total_point_count', ...
-        'ac_trigger_count_per_agent', ...
-        'ac_trigger_rate_percent', ...
-        'ac_trigger_count_per_agent_point', ...
-        'NumInducingPoints', ...
-        'NumBaseInducingPoints', ...
-        'use_initial_state_anchors', ...
-        'initial_state_anchors', ...
-        'Kappa_P', ...
-        'elapsed_time', ...
-        'OfflineDataQuantity_set', ...
-        'state_norm_vector', ...
-        'u_norm_vector', ...
-        'f_hat_norm_vector', ...
-        'f_true_norm_vector', ...
-        'prediction_error_norm_vector', ...
-        'gp_used_vector');
+if ~isempty(SaveFolderName) && ~isempty(SaveFileName)
+    save(fullfile(SaveFolderName, [SaveFileName, '.mat']), ...
+        't_set', 'TrackingError_vector', 'CurrentMode', 'use_formation', ...
+        'x_all_set', 'vartheta_all_set', 'prediction_error_norm_vector', ...
+        'online_update_count', 'projection_update_set', ...
+        'UnknownScale', 'DisturbanceScale', ...
+        'InducingPoints_Coordinates', 'P_inducing', 'Xi_final', 'elapsed_time');
 end
 
 end
 
 %% ========================================================================
-%  Local helper: dataset-style IP-AC consensus ET update
-%  ========================================================================
-function [MaskedGP, Xi, Xi_last_trigger, broadcast_trigger_count, point_trigger_count] = gp_masked_aggregation_ac_et_update( ...
-    Xi, Xi_last_trigger, L, Kappa_P, AgentQuantity, NumInducingPoints, TimeStep, ...
-    InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, method, p_dim, ...
-    N_degree, a_param, sigma_i_ac)
+% IP-DAC with Kia-style event-triggered communication
+% ========================================================================
+function Xi_final = ip_dac_consensus_kia(Pi, L, Kappa_P, t_step, max_iter, tol, N_degree, epsilon_i)
+[p_dim, AgentQuantity, NumInducingPoints] = size(Pi);
+Zeta = zeros(p_dim, AgentQuantity, NumInducingPoints);
+Xi_hat = Pi;
 
-M = NumInducingPoints;
-y_dim = 2;
-broadcast_trigger_count = zeros(AgentQuantity, 1);
-point_trigger_count     = zeros(AgentQuantity, M);
+for iter = 1:max_iter
+    Zeta_prev = Zeta;
 
-if TimeStep > 0
-    L_Xi_hat = laplacian_multiply_agent_dim_local(Xi_last_trigger, L);
-    Xi = Xi - TimeStep * Kappa_P * L_Xi_hat;
+    L_Xi_hat = laplacian_multiply_agent_dim_local(Xi_hat, L);
+    Zeta = Zeta + t_step * Kappa_P * L_Xi_hat;
+    Xi = Pi - Zeta;
 
-    for agent_i = 1:AgentQuantity
-        neighbor_i = (L(agent_i,:) < 0);
-        N_i = N_degree(agent_i);
+    Xi_hat = kia_trigger_update(Xi, Xi_hat, L, N_degree, epsilon_i, iter);
 
-        if N_i <= 0
-            continue;
-        end
-
-        coeff_i = sigma_i_ac * a_param * (1 - a_param*N_i) / N_i;
-
-        E_i = Xi_last_trigger(:,agent_i,:) - Xi(:,agent_i,:);
-        e_norm_sq = squeeze(sum(E_i.^2, 1));
-
-        Z_i = N_i*Xi(:,agent_i,:) - sum(Xi(:,neighbor_i,:), 2);
-        z_norm_sq = squeeze(sum(Z_i.^2, 1));
-
-        trigger_idx = (e_norm_sq(:).' > coeff_i * z_norm_sq(:).');
-
-        if any(trigger_idx)
-            Xi_last_trigger(:,agent_i,trigger_idx) = Xi(:,agent_i,trigger_idx);
-            broadcast_trigger_count(agent_i) = 1;
-            point_trigger_count(agent_i,trigger_idx) = 1;
-        end
+    if max(abs(Zeta(:) - Zeta_prev(:))) < tol
+        break;
     end
 end
 
-MaskedGP = build_maskedgp_from_consensus_state( ...
-    Xi, method, AgentQuantity, M, p_dim, InducingPoints_Coordinates, ...
-    SigmaF, SigmaL, x_dim, y_dim);
-
+Xi_final = Pi - Zeta;
 end
 
 %% ========================================================================
-%  Local helper: build MaskedGP cell from consensus state Xi_final
-%  ========================================================================
-function MaskedGP = build_maskedgp_from_consensus_state( ...
-    Xi_final, method, AgentQuantity, M, p_dim, InducingPoints_Coordinates, ...
-    SigmaF, SigmaL, x_dim, y_dim)
+% IP-AC with Kia-style event-triggered communication
+% ========================================================================
+function Xi_final = ip_ac_consensus_kia(Pi, L, Kappa_P, t_step, max_iter, tol, N_degree, epsilon_i)
+Xi = Pi;
+Xi_hat = Pi;
 
-prior_var = SigmaF^2; %#ok<NASGU>
+for iter = 1:max_iter
+    Xi_prev = Xi;
+
+    L_Xi_hat = laplacian_multiply_agent_dim_local(Xi_hat, L);
+    Xi = Xi - t_step * Kappa_P * L_Xi_hat;
+
+    Xi_hat = kia_trigger_update(Xi, Xi_hat, L, N_degree, epsilon_i, iter);
+
+    if max(abs(Xi(:) - Xi_prev(:))) < tol
+        break;
+    end
+end
+
+Xi_final = Xi;
+end
+
+%% ========================================================================
+% Kia et al. connected-undirected-graph trigger update
+% ========================================================================
+function Xi_hat = kia_trigger_update(Xi, Xi_hat, L, N_degree, epsilon_i, iter)
+[~, AgentQuantity, NumInducingPoints] = size(Xi);
+
+for agent_i = 1:AgentQuantity
+    neighbor_idx = (L(agent_i,:) < 0);
+    neighbor_list = find(neighbor_idx);
+    d_i = N_degree(agent_i);
+    if d_i <= 0
+        continue;
+    end
+
+    E_i = Xi_hat(:,agent_i,:) - Xi(:,agent_i,:);
+    lhs = squeeze(sum(E_i.^2, 1));
+    lhs = lhs(:).';
+
+    neighbor_term = zeros(1, NumInducingPoints);
+    for jj = 1:numel(neighbor_list)
+        nb = neighbor_list(jj);
+        D_ij = Xi_hat(:,agent_i,:) - Xi_hat(:,nb,:);
+        neighbor_term = neighbor_term + squeeze(sum(D_ij.^2, 1)).';
+    end
+
+    rhs = (1/(4*d_i)) * neighbor_term + (1/(4*d_i)) * epsilon_i(agent_i)^2;
+    trigger_idx = lhs > rhs;
+
+    % Kia paper assumes t_1^i = 0. In the discrete simulation, this is the
+    % initial broadcast of all inducing-point components.
+    if iter == 1
+        trigger_idx(:) = true;
+    end
+
+    if any(trigger_idx)
+        Xi_hat(:,agent_i,trigger_idx) = Xi(:,agent_i,trigger_idx);
+    end
+end
+end
+
+%% ========================================================================
+% Dataset-style decoder: Xi_final -> phi -> shared MaskedGP
+% ========================================================================
+function MaskedGP = build_shared_maskedgp_from_xi(Xi_final, method, AgentQuantity, M, p_dim, ...
+    InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim)
+
 method = lower(method);
+phi = zeros(y_dim, M);
 
-num1 = squeeze(Xi_final(1, :, :));
-aux1 = squeeze(Xi_final(2, :, :));
-num2 = squeeze(Xi_final(3, :, :));
-aux2 = squeeze(Xi_final(4, :, :));
-
-switch method
-    case {'poe','gpoe','bcm','rbcm'}
-        phi1 = zeros(size(num1));
-        phi2 = zeros(size(num2));
-        mask1 = abs(aux1) > 1e-8;
-        mask2 = abs(aux2) > 1e-8;
-        phi1(mask1) = num1(mask1) ./ aux1(mask1);
-        phi2(mask2) = num2(mask2) ./ aux2(mask2);
-
-    case 'moe'
-        phi1 = num1 / AgentQuantity;
-        phi2 = num2 / AgentQuantity;
-
-    otherwise
-        error('Unknown aggregation method: %s', method);
+if p_dim < 2*y_dim
+    error('p_dim=%d is too small for y_dim=%d.', p_dim, y_dim);
 end
 
-phi1(~isfinite(phi1)) = 0;
-phi2(~isfinite(phi2)) = 0;
+for d = 1:y_dim
+    xi1 = squeeze(Xi_final(2*d-1, 1, :))';
+    xi2 = squeeze(Xi_final(2*d,   1, :))';
 
-MaskedGP = cell(AgentQuantity, 1);
-for AgentNr = 1:AgentQuantity
-    Y_agent = [phi1(AgentNr, :); phi2(AgentNr, :)];
-    MaskedGP{AgentNr} = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-4, SigmaF, SigmaL);
-    MaskedGP{AgentNr}.add_Alldata(InducingPoints_Coordinates, Y_agent);
+    switch method
+        case {'poe','gpoe','bcm','rbcm'}
+            den = xi2;
+            small_den = abs(den) < 1e-4;
+            den(small_den & den >= 0) = 1e-4;
+            den(small_den & den <  0) = -1e-4;
+            phi(d,:) = xi1 ./ den;
+
+        case 'moe'
+            % Kept consistent with the dataset version.
+            phi(d,:) = xi1 / AgentQuantity;
+
+        otherwise
+            error('Unknown aggregation method: %s.', method);
+    end
 end
 
+phi(~isfinite(phi)) = 0;
+
+MaskedGP = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-6, SigmaF, SigmaL);
+MaskedGP.add_Alldata(InducingPoints_Coordinates, phi);
 end
 
 %% ========================================================================
-%  Local helper: apply graph Laplacian along agent dimension
-%  ========================================================================
+% Apply graph Laplacian along the agent dimension of a 3D tensor
+% ========================================================================
 function L_X = laplacian_multiply_agent_dim_local(X, L)
 [p_dim, agent_quantity, num_points] = size(X);
 X_agent_first = permute(X, [2, 1, 3]);

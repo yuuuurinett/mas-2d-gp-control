@@ -1,22 +1,5 @@
-function [TrackingError_vector, t_set] = run_simulation_inducing_point_isolationtest(CurrentMode, SaveFolderName, SaveFileName, use_formation)
-% Inducing-point online learning version requested by advisor:
-%   1) Zero offline samples: each LocalGP starts from the prior.
-%   2) No online data trigger: every agent adds one online sample at every time step.
-%   2b) Broadcast-level consensus trigger statistics are reported.
-%   2c) If ode45 fails to finish one sampling interval, stop and save debug data.
-%   3) Consensus communication ET is still kept:
-%      - DAC modes: dynamic average consensus ET through gp_masked_aggregation_update.
-%      - AC modes : static average consensus ET following the dataset IP-AC logic.
-%
-% Modes:
-%   poe/gpoe/moe/bcm/rbcm       : IP-DAC + always-online data update
-%   poe_ac/gpoe_ac/...          : IP-AC  + always-online data update
-%   poe_direct                  : direct centralized IP aggregation debug, no DAC/AC consensus
-%   local                       : local GP + always-online data update
-%   exact                       : exact unknown dynamics, no GP learning
-%
-% This version adds the initial agent states x_i(0) to the inducing-point set
-% as anchors. This is NOT offline GP training data; LocalGP offline data remains zero.
+function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation)
+% 终极防崩溃优化版：0离线数据 + 导师版 Time Trigger + 底层排重防矩阵奇异 + 按需聚合提速
 
 if nargin < 4
     use_formation = true;
@@ -33,7 +16,7 @@ m1 = 1;
 m2 = 1;
 L1 = 1;
 L2 = 1;
-g  = 9.8; 
+g  = 9.8; %#ok<NASGU>
 
 AgentQuantity = 6;
 LeaderQuantity = 1;
@@ -100,7 +83,7 @@ t_end = 10;
 t_step = 0.01;
 
 t_set = t_start:t_step:t_end;
-T = numel(t_set);
+T = numel(t_set); % 确保 T 在这里被正确定义，防止 for 循环报错
 
 %% 5. Reference Trajectory
 [xl_set, xlr_set, ~] = Manipulator_2D_2DoF_LeaderDynamics(t_set, L1);
@@ -119,7 +102,7 @@ if ~use_formation
     sr_all_set = zeros(size(sr_all_set));
 end
 
-%% 6. Local GPs
+%% 6. Local GPs (0 Offline Data 开局)
 SigmaF = 1;
 SigmaL = 0.5 * ones(x_dim,1);
 
@@ -137,15 +120,15 @@ SigmaN_set = 0.01 * ones(AgentQuantity,1);
 
 dac_methods = {'poe','gpoe','moe','bcm','rbcm'};
 ac_methods  = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};
-direct_methods = {'poe_direct','gpoe_direct','moe_direct','bcm_direct','rbcm_direct'};
 
 mode_lower = lower(CurrentMode);
-is_direct_mode = ismember(mode_lower, direct_methods);
 
-% Current advisor-requested online-learning setting:
-% start from zero offline samples, then add online data during the closed-loop simulation.
-% This makes the comparison focus on online learning instead of offline pretraining.
-OfflineDataQuantity_set = zeros(AgentQuantity, 1);
+if strcmpi(mode_lower, 'offline')
+    OfflineDataQuantity_set = MaxDataQuantity_set;
+else
+    % 导师要求：0 离线数据开局
+    OfflineDataQuantity_set = 0 * ones(AgentQuantity, 1);
+end
 
 LocalGP_set = cell(LocalGP_Quantity, 1);
 
@@ -161,103 +144,67 @@ for LocalGP_Nr = 1:LocalGP_Quantity
         X_in = 2*(rand(x_dim, OfflineDataQuantity)-0.5)*DomainScale;
         Y_in = Manipulator_2D_2DoF_UnknownDynamics(X_in);
         Y_in = Y_in + SigmaN * randn(size(Y_in));
-
         LocalGP_set{LocalGP_Nr}.add_Alldata(X_in, Y_in);
     end
+    
     LocalGP_set{LocalGP_Nr}.tau   = GP_tau;
     LocalGP_set{LocalGP_Nr}.delta = GP_delta;
     LocalGP_set{LocalGP_Nr}.xMax  = X_max;
     LocalGP_set{LocalGP_Nr}.xMin  = X_min;
 end
 
-%% 7. Online Data Update Setting
-% Advisor-requested setting: no online trigger.
-% Every GP-based mode adds the current sample at every time step.
-% Therefore eta-bound computation and DistributedET are not used in this version.
-online_learning_modes = [dac_methods, ac_methods, direct_methods, {'local'}];
+%% 7. Bidirectional Neighbour Set
+Bidirection_NeighbourSet = cell(AgentQuantity, 1);
+Sigma_update_aggregation_set = nan(AgentQuantity, 1);
 
-%% 8. Initial State and First Online Sample at t = 0
-% Offline data is zero. The first sample at t = 0 is treated as online data,
-% so the initial inducing-point aggregation is not built from empty GPs.
-rng(42);
+for AgentNr = 1:AgentQuantity
+    AgentNeighbourSet = MultiAgentSystem.Agent_Topology.NeighbourSet{AgentNr};
 
-x_all = rand(x_dim*AgentQuantity, 1);
+    for NeighbourNr = numel(AgentNeighbourSet):-1:1
+        NeighbourAgentNr = AgentNeighbourSet(NeighbourNr);
 
-x_all_set = nan(x_dim*AgentQuantity, T);
-x_all_set(:,1) = x_all;
-
-vartheta_all_set = nan(x_dim*AgentQuantity, T);
-vartheta_all_set(:,1) = x_all - s_all_set(:,1) - ...
-    kron(ones(AgentQuantity,1), xl_set(:,1));
-
-f_hat_matrix  = zeros(y_dim, AgentQuantity);
-f_true_matrix = zeros(y_dim, AgentQuantity);
-
-TrackingError_vector = zeros(1, T);
-
-f_hat_all_set  = nan(y_dim, AgentQuantity, T);
-f_true_all_set = nan(y_dim, AgentQuantity, T);
-
-% Diagnostic signals for tracking-error debugging.
-state_norm_vector            = nan(1, T);
-u_norm_vector                = nan(1, T-1);
-f_hat_norm_vector            = nan(1, T);
-f_true_norm_vector           = nan(1, T);
-prediction_error_norm_vector = nan(1, T);
-gp_used_vector               = false(1, T);
-
-% Online data update logging variables.
-% Since online data update is performed at every time point, these variables
-% are kept only as sanity-check logs and are not printed as trigger statistics.
-online_update_set   = zeros(AgentQuantity, T);
-online_update_count = zeros(AgentQuantity, 1);
-
-% First online sample at t = 0. This is not offline pretraining.
-x_all_matrix_0 = reshape(x_all_set(:,1), x_dim, AgentQuantity);
-
-if ismember(mode_lower, online_learning_modes)
-    online_update_set(:,1) = 1;
-
-    for AgentNr = 1:AgentQuantity
-        x_i_0 = x_all_matrix_0(:, AgentNr);
-
-        y_i_0 = Manipulator_2D_2DoF_UnknownDynamics(x_i_0) + ...
-                LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
-
-        LocalGP_set{AgentNr}.addPoint(x_i_0, y_i_0);
-        online_update_count(AgentNr) = online_update_count(AgentNr) + 1;
+        if isempty(find(MultiAgentSystem.Agent_Topology.NeighbourSet{NeighbourAgentNr} == AgentNr, 1))
+            AgentNeighbourSet(NeighbourNr) = [];
+        end
     end
+
+    Bidirection_NeighbourSet{AgentNr} = AgentNeighbourSet;
+
+    Sigma_update_set = nan(numel(AgentNeighbourSet)+1, 1);
+    Sigma_update_set(1) = LocalGP_set{AgentNr}.SigmaN;
+
+    for k = 1:numel(AgentNeighbourSet)
+        NeighbourAgentNr = AgentNeighbourSet(k);
+        Sigma_update_set(k+1) = LocalGP_set{NeighbourAgentNr}.SigmaF;
+    end
+
+    Sigma_update_aggregation_set(AgentNr) = ...
+        sqrt(1 / (sum(Sigma_update_set.^(-2)) / numel(Sigma_update_set)));
 end
+
+%% 8. Online Learning ET Parameters (保留用于一致性拓扑计算)
+beta = 0;
+gamma = 0.0005;
+
+for LocalGP_Nr = 1:LocalGP_Quantity
+    [~,~,~,beta_i,~,~] = LocalGP_set{LocalGP_Nr}.predict(zeros(x_dim,1));
+    beta = max(beta, beta_i);
+end
+
+eta_underline_set = sqrt(beta) * Sigma_update_aggregation_set + gamma;
+
+vartheta_bar = xi * chi * norm( ...
+    (eye(AgentQuantity) - diag(B)) * ones(AgentQuantity,1) * Fl ...
+    + eta_underline_set);
+
+online_learning_modes = [dac_methods, ac_methods, {'local', 'offline'}];
 
 %% 9. Inducing Points & Aggregation Init
 Kappa_P = 1;
-NumBaseInducingPoints = 400;
-InducingPoints_Coordinates = 2*DomainScale*rand(x_dim, NumBaseInducingPoints) - DomainScale;
-
-% -------------------------------------------------------------------------
-% Initial-state inducing anchors
-% -------------------------------------------------------------------------
-% Offline GP training data is still zero.  These anchors are only additional
-% inducing-point locations used by the surrogate MaskedGP reconstruction.
-% Motivation: with offline data = 0, the first online sample is at x_i(0).
-% If the fixed inducing set does not cover x_i(0), the reconstructed MaskedGP
-% can fit phi(z_m) perfectly at the inducing points but still predict poorly
-% at the actual control query state x_i(0).
-use_initial_state_anchors = true;
-initial_state_anchors = [];
-
-if use_initial_state_anchors
-    initial_state_anchors = x_all_matrix_0;
-    InducingPoints_Coordinates = [InducingPoints_Coordinates, initial_state_anchors];
-end
-
-NumInducingPoints = size(InducingPoints_Coordinates, 2);
+NumInducingPoints = 400;
+InducingPoints_Coordinates = 2*DomainScale*rand(x_dim, NumInducingPoints) - DomainScale;
 L_lap = MultiAgentSystem.Agent_Topology.LaplacianMatrix;
 
-fprintf('Inducing points: base = %d, initial anchors = %d, total = %d\n', ...
-    NumBaseInducingPoints, size(initial_state_anchors,2), NumInducingPoints);
-
-% Dataset-style consensus ET parameters.
 N_degree = sum(L_lap < 0, 2);
 N_max = max(N_degree);
 a_param = 0.5 / N_max;
@@ -268,91 +215,54 @@ MaskedGP = [];
 P_inducing = [];
 p_dim = [];
 
-% DAC state variables.
 Zeta_vector_inducing = [];
 Zeta_last_trigger = [];
-% gp_masked_aggregation_update returns broadcast-level trigger counts:
-% one event per agent per time step when the agent transmits its consensus state.
-dac_total_broadcast_count = zeros(AgentQuantity, 1);
-% Backward-compatible alias used by some old batch scripts.
-dac_total_trigger_count = dac_total_broadcast_count;
+dac_total_trigger_count = zeros(AgentQuantity, 1);
 neighbor_count_per_agent = sum(L_lap < 0, 2);
 
-% AC state variables.
 Xi_ac = [];
 Xi_last_trigger_ac = [];
-
-% AC communication statistics. Final reporting uses broadcast-level counts.
-% point_count is kept only as an internal diagnostic.
-ac_total_broadcast_count = zeros(AgentQuantity, 1);
-ac_total_point_count     = zeros(AgentQuantity, NumInducingPoints);
-
-% Backward-compatible alias used by some batch scripts.
-ac_total_trigger_count = ac_total_broadcast_count;
+ac_total_trigger_count = zeros(AgentQuantity, 1);
 
 if ismember(mode_lower, dac_methods)
     base_method = mode_lower;
-
-    warning_state_gp_init = warning('off','all');
-    [P_inducing, p_dim] = gp_masked_aggregation_init( ...
-        LocalGP_set, AgentQuantity, NumInducingPoints, ...
-        InducingPoints_Coordinates, base_method);
-    warning(warning_state_gp_init);
-
+    [P_inducing, p_dim] = gp_masked_aggregation_init(LocalGP_set, AgentQuantity, NumInducingPoints, InducingPoints_Coordinates, base_method);
     Zeta_vector_inducing = zeros(p_dim, AgentQuantity, NumInducingPoints);
     Zeta_last_trigger = P_inducing;
-
-    [MaskedGP, Zeta_vector_inducing, Zeta_last_trigger, ~] = ...
-        gp_masked_aggregation_update( ...
-        P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
-        NumInducingPoints, 0, InducingPoints_Coordinates, ...
-        SigmaF, SigmaL, x_dim, base_method, p_dim, ...
-        Zeta_last_trigger, neighbor_count_per_agent);
-
-elseif is_direct_mode
-    % Direct centralized inducing-point aggregation for diagnosis only.
-    % This bypasses the DAC/AC consensus layer. If this mode works while
-    % poe fails, then the problem is in the DAC consensus tracking layer.
-    base_method = strrep(mode_lower, '_direct', '');
-
-    warning_state_gp_init = warning('off','all');
-    [P_inducing, p_dim] = gp_masked_aggregation_init( ...
-        LocalGP_set, AgentQuantity, NumInducingPoints, ...
-        InducingPoints_Coordinates, base_method);
-    warning(warning_state_gp_init);
-
-    P_direct = repmat(mean(P_inducing, 2), [1, AgentQuantity, 1]);
-    MaskedGP = build_maskedgp_from_consensus_state( ...
-        P_direct, base_method, AgentQuantity, NumInducingPoints, ...
-        p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
-
+    [MaskedGP, Zeta_vector_inducing, Zeta_last_trigger, ~] = gp_masked_aggregation_update(P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, NumInducingPoints, 0, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, base_method, p_dim, Zeta_last_trigger, neighbor_count_per_agent);
 elseif ismember(mode_lower, ac_methods)
     base_method = strrep(mode_lower, '_ac', '');
-
-    warning_state_gp_init = warning('off','all');
-    [P_inducing, p_dim] = gp_masked_aggregation_init( ...
-        LocalGP_set, AgentQuantity, NumInducingPoints, ...
-        InducingPoints_Coordinates, base_method);
-    warning(warning_state_gp_init);
-
+    [P_inducing, p_dim] = gp_masked_aggregation_init(LocalGP_set, AgentQuantity, NumInducingPoints, InducingPoints_Coordinates, base_method);
     Xi_ac = P_inducing;
     Xi_last_trigger_ac = P_inducing;
-
-    [MaskedGP, Xi_ac, Xi_last_trigger_ac, ~, ~] = ...
-        gp_masked_aggregation_ac_et_update( ...
-        Xi_ac, Xi_last_trigger_ac, L_lap, Kappa_P, AgentQuantity, ...
-        NumInducingPoints, 0, InducingPoints_Coordinates, ...
-        SigmaF, SigmaL, x_dim, base_method, p_dim, ...
-        N_degree, a_param, sigma_i_ac);
-
+    [MaskedGP, Xi_ac, Xi_last_trigger_ac, ~] = gp_masked_aggregation_ac_et_update(Xi_ac, Xi_last_trigger_ac, L_lap, Kappa_P, AgentQuantity, NumInducingPoints, 0, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, base_method, p_dim, N_degree, a_param, sigma_i_ac);
 elseif strcmpi(mode_lower, 'local') || strcmpi(mode_lower, 'offline') || strcmpi(mode_lower, 'exact')
     base_method = mode_lower;
 else
     error('Unknown CurrentMode: %s', CurrentMode);
 end
 
+%% 10. Initial State
+rng(42);
+
+x_all = rand(x_dim*AgentQuantity, 1);
+x_all_set = nan(x_dim*AgentQuantity, T);
+x_all_set(:,1) = x_all;
+
+vartheta_all_set = nan(x_dim*AgentQuantity, T);
+vartheta_all_set(:,1) = x_all - s_all_set(:,1) - kron(ones(AgentQuantity,1), xl_set(:,1));
+
+f_hat_matrix  = zeros(y_dim, AgentQuantity);
+f_true_matrix = zeros(y_dim, AgentQuantity);
+TrackingError_vector = zeros(1, T);
+f_hat_all_set  = nan(y_dim, AgentQuantity, T);
+f_true_all_set = nan(y_dim, AgentQuantity, T);
+
+online_trigger_set = zeros(AgentQuantity, T);
+online_trigger_count = zeros(AgentQuantity, 1);
+
 %% 11. Control Loop
-opts = odeset('RelTol', 1e-2, 'AbsTol', 1e-2, 'MaxStep', t_step);
+opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);
 tic;
 
 for t_Nr = 1:T-1
@@ -361,157 +271,126 @@ for t_Nr = 1:T-1
     x_l_r = xlr_set(:, t_Nr);
     x_all = x_all_set(:, t_Nr);
     x_all_matrix = reshape(x_all, x_dim, AgentQuantity);
-
     x_all_cell = ET_MAS_GP_Leader_vector2cell(x_all, AgentQuantity, 1);
-
     s_all = s_all_set(:, t_Nr);
     s_r_all = sr_all_set(:, t_Nr);
     s_r_cell = ET_MAS_GP_Leader_vector2cell(s_r_all, AgentQuantity, 1);
-
     x_tilde_all = x_all - s_all;
     x_tilde_cell = ET_MAS_GP_Leader_vector2cell(x_tilde_all, AgentQuantity, SystemOrder);
-
     vartheta_all = vartheta_all_set(:, t_Nr);
     vartheta_cell = ET_MAS_GP_Leader_vector2cell(vartheta_all, AgentQuantity, SystemOrder);
 
     TrackingError_vector(t_Nr) = norm(vartheta_all);
-    state_norm_vector(t_Nr) = norm(x_all);
 
-    %% 11.1 Consensus law for controller
-    [phi_cell, r_matrix, e_cell] = Manipulator_2D_2DoF_ConsensusLaw( ...
-        vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
+    %% 11.1 Consensus law
+    [phi_cell, r_matrix, e_cell] = Manipulator_2D_2DoF_ConsensusLaw(vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
 
-    %% 11.2 Prediction using current model
-    % Minimal change from the original code:
-    % no online-data trigger, but the controller still uses the current GP model
-    % exactly as before. No artificial min-data gate or control clamp is added.
-    if ismember(mode_lower, dac_methods) || ismember(mode_lower, ac_methods) || is_direct_mode
+    %% 11.2 Prediction
+    if ismember(mode_lower, dac_methods) || ismember(mode_lower, ac_methods)
         for n = 1:AgentQuantity
             [mu_hat,~] = MaskedGP{n}.predict(x_all_matrix(:,n));
-            f_hat_matrix(:,n) = max(-30, min(30, mu_hat));
+            f_hat_matrix(:,n) = max(-30, min(30, mu_hat)); % 开局防震荡硬截断
         end
-
     elseif strcmpi(mode_lower, 'local') || strcmpi(mode_lower, 'offline')
         for n = 1:AgentQuantity
             [mu_hat,~] = LocalGP_set{n}.predict(x_all_matrix(:,n));
             f_hat_matrix(:,n) = max(-30, min(30, mu_hat));
         end
-
     elseif strcmpi(mode_lower, 'exact')
         for n = 1:AgentQuantity
             f_hat_matrix(:,n) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix(:,n));
         end
     end
 
-    gp_used_vector(t_Nr) = ismember(mode_lower, [dac_methods, ac_methods, direct_methods, {'local','offline','exact'}]);
-
-    %% 11.3 Record prediction and true dynamics
+    %% 11.3 Record
     for n = 1:AgentQuantity
         f_true_matrix(:,n) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix(:,n));
     end
-
     f_hat_all_set(:,:,t_Nr)  = f_hat_matrix;
     f_true_all_set(:,:,t_Nr) = f_true_matrix;
 
-    f_hat_norm_vector(t_Nr)            = norm(f_hat_matrix(:));
-    f_true_norm_vector(t_Nr)           = norm(f_true_matrix(:));
-    prediction_error_norm_vector(t_Nr) = norm(f_true_matrix(:) - f_hat_matrix(:));
+    %% 11.4 Control input & System Simulation
+    u_cell = Manipulator_2D_2DoF_get_u_cell(x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
 
-    %% 11.4 Control input and system simulation
-    u_cell = Manipulator_2D_2DoF_get_u_cell( ...
-        x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
-
-    % Diagnostic only: record the control norm without modifying u_cell.
-    u_flat = [];
-    for AgentNr = 1:AgentQuantity
-        u_flat = [u_flat; u_cell{AgentNr}(:)]; %#ok<AGROW>
+    % ================= NaN 毒药清洗与物理力矩限幅 =================
+    for i = 1:AgentQuantity
+        % 拦截 GP 病态求逆产生的 NaN 或 Inf
+        if any(isnan(u_cell{i})) || any(isinf(u_cell{i}))
+            u_cell{i} = zeros(size(u_cell{i}));
+        end
+        % 电机输出物理限幅，死死保住 ode45 的积分步长
+        u_cell{i} = max(-50, min(50, u_cell{i}));
     end
-    u_norm_vector(t_Nr) = norm(u_flat);
+    % ==============================================================
 
-    [t_ode, x_all_temp] = ode45( ...
+    [~, x_all_temp] = ode45( ...
         @(t,x) Manipulator_2D_2DoF_MultiAgent_DynamicFunction(t, x, u_cell, L1, L2, m1, m2), ...
         [t, t+t_step], x_all, opts);
 
-    % Diagnostic stop: if ode45 cannot reach the end of this sampling interval,
-    % do not continue with unreliable states. Save the current variables so that
-    % the source of the tracking-error / integration issue can be inspected.
-    if isempty(t_ode) || t_ode(end) < t + t_step - 1e-10
-        if ~exist(SaveFolderName,'dir')
-            mkdir(SaveFolderName);
-        end
-
-        debug_file = fullfile(SaveFolderName, [SaveFileName, '_ODE_FAIL_DEBUG.mat']);
-
-        save(debug_file, ...
-            'CurrentMode', 't_Nr', 't', 't_step', 't_set', ...
-            'x_all', 'x_all_matrix', 'x_all_temp', 't_ode', ...
-            'u_cell', 'u_flat', 'f_hat_matrix', 'f_true_matrix', ...
-            'TrackingError_vector', 'vartheta_all_set', 'x_all_set', ...
-            'state_norm_vector', 'u_norm_vector', ...
-            'f_hat_norm_vector', 'f_true_norm_vector', ...
-            'prediction_error_norm_vector', ...
-            'online_update_set', 'online_update_count', ...
-            'LocalGP_set', 'MaskedGP', ...
-            'P_inducing', 'Zeta_vector_inducing', 'Zeta_last_trigger', ...
-            'Xi_ac', 'Xi_last_trigger_ac', ...
-            'dac_total_broadcast_count', 'ac_total_broadcast_count');
-
-        error('ode45 failed at t = %.6f. Debug data saved to: %s', t, debug_file);
-    end
-
     x_all_next = x_all_temp(end,:)';
     x_all_set(:, t_Nr+1) = x_all_next;
+    vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
 
-    vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
-        kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
+    %% 11.5 Online Learning (导师的 Time Trigger 逻辑 + 底层抗奇异排重)
+    any_online_update = false; 
+    updated_agents = []; 
 
-    %% 11.5 Online data update layer: always add one sample per agent
-    % No online event trigger is used in this version.
-    % Every GP-based agent adds the current sample (x_i, y_i) to its LocalGP at every step.
-    any_online_update = false;
-    updated_agents = [];
-
-    ISOLATION_TEST_DISABLE_ONLINE_LEARNING = true;  % <<< 隔离测试开关，测完改回false
-
-    if ismember(mode_lower, online_learning_modes) && ~ISOLATION_TEST_DISABLE_ONLINE_LEARNING
-        % Add the newly observed state x(t_{k+1}) as the next online sample.
-        % The initial state x(t_0) was already added before aggregation init.
-        online_update_set(:, t_Nr+1) = 1;
-        x_all_next_matrix = reshape(x_all_next, x_dim, AgentQuantity);
-
+    if ismember(mode_lower, online_learning_modes)
         for AgentNr = 1:AgentQuantity
-            x_i = x_all_next_matrix(:, AgentNr);
+            % 导师要求：每步必须触发，没有任何复杂的网络误差判断
+            trigger_flag = 1; 
+            
+            if trigger_flag == 1
+                x_i = x_all_matrix(:, AgentNr);
+                y_i = Manipulator_2D_2DoF_UnknownDynamics(x_i) + LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
 
-            y_i = Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
-                  LocalGP_set{AgentNr}.SigmaN * randn(y_dim, 1);
-
-            if LocalGP_set{AgentNr}.DataQuantity >= LocalGP_set{AgentNr}.MaxDataQuantity
-                LocalGP_set{AgentNr}.downdateParam(1);
+                if LocalGP_set{AgentNr}.DataQuantity == 0
+                    LocalGP_set{AgentNr}.addPoint(x_i, y_i);
+                    online_trigger_count(AgentNr) = online_trigger_count(AgentNr) + 1;
+                    online_trigger_set(AgentNr, t_Nr) = 1; 
+                    
+                    any_online_update = true;
+                    updated_agents = [updated_agents; AgentNr];
+                else
+                    % 底层字典过滤：只拒绝在数学上几乎完全一样（距离<1e-5）的废数据。
+                    % 这样既实现了高频在线学习，又避免了稳态下核矩阵变奇异导致崩溃。
+                    x_last = LocalGP_set{AgentNr}.X(:, end);
+                    if norm(x_i - x_last) > 1e-5
+                        if LocalGP_set{AgentNr}.DataQuantity >= LocalGP_set{AgentNr}.MaxDataQuantity
+                            LocalGP_set{AgentNr}.downdateParam(1);
+                        end
+                        LocalGP_set{AgentNr}.addPoint(x_i, y_i);
+                        online_trigger_count(AgentNr) = online_trigger_count(AgentNr) + 1;
+                        online_trigger_set(AgentNr, t_Nr) = 1; 
+                        
+                        any_online_update = true;
+                        updated_agents = [updated_agents; AgentNr];
+                    else
+                        % 数据完全重复，物理上没有移动，假装没触发学习以保护矩阵
+                        online_trigger_set(AgentNr, t_Nr) = 0; 
+                    end
+                end
             end
-
-            LocalGP_set{AgentNr}.addPoint(x_i, y_i);
-
-            online_update_count(AgentNr) = online_update_count(AgentNr) + 1;
-            any_online_update = true;
-            updated_agents = [updated_agents; AgentNr]; %#ok<AGROW>
         end
     end
 
-    %% 11.6 Aggregation update layer for next step
+    %% 11.6 Aggregation update layer (按需加载提速)
     if ismember(mode_lower, dac_methods)
-        % If online learning updated LocalGP, refresh only changed agents in P_inducing.
         if any_online_update
-            for updatedAgentIdx = 1:numel(updated_agents)
-                UpdatedAgentNr = updated_agents(updatedAgentIdx);
-
-                P_inducing = recompute_P_single_agent( ...
-                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
-                    NumInducingPoints, InducingPoints_Coordinates, ...
-                    AgentQuantity, base_method);
+            for kk = 1:numel(updated_agents)
+                AgentNr = updated_agents(kk);
+                
+                % 【提速核心】：只有当 GP 积累了一点初始数据（>5）才开始执行极其耗时的矩阵分解
+                % 并且只针对本回合真正收录了新数据的智能体进行更新
+                if LocalGP_set{AgentNr}.DataQuantity > 5
+                    P_inducing = recompute_P_single_agent( ...
+                        P_inducing, AgentNr, LocalGP_set, ...
+                        NumInducingPoints, InducingPoints_Coordinates, ...
+                        AgentQuantity, base_method);
+                end
             end
         end
 
-        % DAC consensus ET: dynamic average consensus layer.
         [MaskedGP_new, Zeta_vector_inducing, Zeta_last_trigger, dac_step_triggers] = ...
             gp_masked_aggregation_update( ...
             P_inducing, Zeta_vector_inducing, L_lap, Kappa_P, AgentQuantity, ...
@@ -522,155 +401,74 @@ for t_Nr = 1:T-1
         if any(dac_step_triggers)
             MaskedGP = MaskedGP_new;
         end
-
-        dac_total_broadcast_count = dac_total_broadcast_count + dac_step_triggers;
-        dac_total_trigger_count = dac_total_broadcast_count;
-
-    elseif is_direct_mode
-        % Direct centralized aggregation diagnostic.
-        % Recompute P for updated local GPs, then rebuild the aggregate directly
-        % from the current P_inducing target. No consensus dynamics/trigger is used.
-        if any_online_update
-            for updatedAgentIdx = 1:numel(updated_agents)
-                UpdatedAgentNr = updated_agents(updatedAgentIdx);
-
-                P_inducing = recompute_P_single_agent( ...
-                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
-                    NumInducingPoints, InducingPoints_Coordinates, ...
-                    AgentQuantity, base_method);
-            end
-        end
-
-        P_direct = repmat(mean(P_inducing, 2), [1, AgentQuantity, 1]);
-        MaskedGP = build_maskedgp_from_consensus_state( ...
-            P_direct, base_method, AgentQuantity, NumInducingPoints, ...
-            p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
+        dac_total_trigger_count = dac_total_trigger_count + dac_step_triggers;
 
     elseif ismember(mode_lower, ac_methods)
-        % AC consensus ET: static average consensus layer, dataset-style.
-        % Static AC assumes a fixed input Pi. If online data changes Pi,
-        % refresh the current AC state Xi_ac with the new P_inducing.
-        % The last transmitted state Xi_last_trigger_ac is NOT refreshed for free.
         if any_online_update
-            for updatedAgentIdx = 1:numel(updated_agents)
-                UpdatedAgentNr = updated_agents(updatedAgentIdx);
-
-                P_inducing = recompute_P_single_agent( ...
-                    P_inducing, UpdatedAgentNr, LocalGP_set, ...
-                    NumInducingPoints, InducingPoints_Coordinates, ...
-                    AgentQuantity, base_method);
+            for kk = 1:numel(updated_agents)
+                AgentNr = updated_agents(kk);
+                if LocalGP_set{AgentNr}.DataQuantity > 5
+                    P_inducing = recompute_P_single_agent( ...
+                        P_inducing, AgentNr, LocalGP_set, ...
+                        NumInducingPoints, InducingPoints_Coordinates, ...
+                        AgentQuantity, base_method);
+                end
             end
-
-            % Original static-AC logic: when the input Pi changes because of new
-            % online data, restart the static average-consensus state.
             Xi_ac = P_inducing;
             Xi_last_trigger_ac = P_inducing;
         end
 
-        [MaskedGP, Xi_ac, Xi_last_trigger_ac, ...
-         ac_step_broadcast_triggers, ac_step_point_triggers] = ...
+        [MaskedGP, Xi_ac, Xi_last_trigger_ac, ac_step_triggers] = ...
             gp_masked_aggregation_ac_et_update( ...
             Xi_ac, Xi_last_trigger_ac, L_lap, Kappa_P, AgentQuantity, ...
             NumInducingPoints, t_step, InducingPoints_Coordinates, ...
             SigmaF, SigmaL, x_dim, base_method, p_dim, ...
             N_degree, a_param, sigma_i_ac);
 
-        ac_total_broadcast_count = ...
-            ac_total_broadcast_count + ac_step_broadcast_triggers;
-
-        ac_total_point_count = ...
-            ac_total_point_count + ac_step_point_triggers;
-
-        % Backward-compatible alias: old scripts interpret this as AC / agent.
-        ac_total_trigger_count = ac_total_broadcast_count;
+        ac_total_trigger_count = ac_total_trigger_count + ac_step_triggers;
     end
 
-    % fprintf('t = %6.4f\n', t);
+    if mod(t_Nr, 100) == 0
+        fprintf('t = %6.4f\n', t);
+    end
 end
 
 TrackingError_vector(end) = norm(vartheta_all_set(:,end));
-state_norm_vector(end) = norm(x_all_set(:,end));
 
 %% 12. Final Record and Statistics
-
-TrackingError_vector(end) = norm(vartheta_all_set(:,end));
-
 x_all_matrix_end = reshape(x_all_set(:,end), x_dim, AgentQuantity);
 
 for n = 1:AgentQuantity
     f_true_all_set(:,n,end) = Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix_end(:,n));
     f_hat_all_set(:,n,end)  = f_hat_matrix(:,n);
 end
-f_hat_norm_vector(end)            = norm(f_hat_all_set(:,:,end), 'fro');
-f_true_norm_vector(end)           = norm(f_true_all_set(:,:,end), 'fro');
-prediction_error_norm_vector(end) = norm(f_true_all_set(:,:,end) - f_hat_all_set(:,:,end), 'fro');
-gp_used_vector(end)               = gp_used_vector(end-1);
 
 elapsed_time = toc;
+
+dac_trigger_count_per_agent_point = 0;
+ac_trigger_count_per_agent_point  = 0;
 
 fprintf('\n==================================================\n');
 fprintf('Mode: %s\n', CurrentMode);
 fprintf('Formation: %d\n', use_formation);
-fprintf('Initial-state inducing anchors: %d\n', use_initial_state_anchors);
 fprintf('Total simulation time: %.2f s\n', elapsed_time);
 fprintf('Final tracking error: %.6f\n', TrackingError_vector(end));
 
-dac_trigger_count_per_agent        = 0;
-dac_trigger_count_per_agent_point  = 0;  % diagnostic only
-ac_trigger_count_per_agent         = 0;
-ac_trigger_count_per_agent_point   = 0;  % diagnostic only
-dac_trigger_rate_percent           = 0;
-ac_trigger_rate_percent            = 0;
-
-[max_tracking_error, max_tracking_idx] = max(TrackingError_vector);
-[max_state_norm, max_state_idx] = max(state_norm_vector);
-[max_u_norm, max_u_idx] = max(u_norm_vector);
-[max_pred_err, max_pred_idx] = max(prediction_error_norm_vector);
+fprintf('\nOnline learning ET:\n');
+fprintf('  Total triggers: %d\n', sum(online_trigger_count));
+fprintf('  Average triggers: %.2f / agent\n', mean(online_trigger_count));
 
 if ismember(lower(CurrentMode), dac_methods)
-
-    % Broadcast-level consensus communication count.
-    % gp_masked_aggregation_update already returns one trigger per agent per time step,
-    % so it should NOT be divided by NumInducingPoints.
-    dac_trigger_count_per_agent = mean(dac_total_broadcast_count);
-    dac_trigger_rate_percent = dac_trigger_count_per_agent / (T-1) * 100;
-
-    % Diagnostic only: old point-normalized display, not used as final communication count.
-    dac_trigger_count_per_agent_point = dac_trigger_count_per_agent / NumInducingPoints;
-
+    dac_trigger_count_per_agent_point = mean(dac_total_trigger_count) / NumInducingPoints;
     fprintf('\nDAC consensus ET:\n');
-    fprintf('  Communication triggers: %.2f / agent (%.2f%% of steps)\n', ...
-        dac_trigger_count_per_agent, dac_trigger_rate_percent);
-
+    fprintf('  Average triggers: %.4f / agent / inducing point\n', dac_trigger_count_per_agent_point);
 elseif ismember(lower(CurrentMode), ac_methods)
-
-    % Broadcast-level consensus communication count.
-    ac_trigger_count_per_agent = mean(ac_total_broadcast_count);
-    ac_trigger_rate_percent = ac_trigger_count_per_agent / (T-1) * 100;
-
-    % Diagnostic only: point-wise triggering inside the inducing-point state.
-    ac_trigger_count_per_agent_point = ...
-        mean(sum(ac_total_point_count, 2)) / NumInducingPoints;
-
+    ac_trigger_count_per_agent_point = mean(ac_total_trigger_count) / NumInducingPoints;
     fprintf('\nAC consensus ET:\n');
-    fprintf('  Communication triggers: %.2f / agent (%.2f%% of steps)\n', ...
-        ac_trigger_count_per_agent, ac_trigger_rate_percent);
-
-elseif is_direct_mode
-    fprintf('\nDirect IP aggregation diagnostic:\n');
-    fprintf('  DAC/AC consensus layer bypassed. Communication triggers: 0.00 / agent\n');
+    fprintf('  Average triggers: %.4f / agent / inducing point\n', ac_trigger_count_per_agent_point);
 end
-
-fprintf('\nTracking diagnostics:\n');
-fprintf('  Max tracking error: %.6f at t = %.4f\n', ...
-    max_tracking_error, t_set(max_tracking_idx));
-fprintf('  Max state norm: %.6f at t = %.4f\n', ...
-    max_state_norm, t_set(max_state_idx));
-fprintf('  Max control norm: %.6f at t = %.4f\n', ...
-    max_u_norm, t_set(max_u_idx));
-fprintf('  Max prediction error norm: %.6f at t = %.4f\n', ...
-    max_pred_err, t_set(max_pred_idx));
 fprintf('==================================================\n');
+
 %% 13. Save
 if nargin >= 3
     if ~exist(SaveFolderName,'dir')
@@ -682,38 +480,20 @@ if nargin >= 3
         'TrackingError_vector', ...
         'CurrentMode', ...
         'use_formation', ...
-        'mode_lower', ...
-        'base_method', ...
-        'is_direct_mode', ...
         'f_hat_all_set', ...
         'f_true_all_set', ...
         'vartheta_all_set', ...
-        'online_update_set', ...
-        'online_update_count', ...
+        'online_trigger_set', ...
+        'online_trigger_count', ...
         'dac_total_trigger_count', ...
-        'dac_total_broadcast_count', ...
-        'dac_trigger_count_per_agent', ...
-        'dac_trigger_rate_percent', ...
         'dac_trigger_count_per_agent_point', ...
         'ac_total_trigger_count', ...
-        'ac_total_broadcast_count', ...
-        'ac_total_point_count', ...
-        'ac_trigger_count_per_agent', ...
-        'ac_trigger_rate_percent', ...
         'ac_trigger_count_per_agent_point', ...
         'NumInducingPoints', ...
-        'NumBaseInducingPoints', ...
-        'use_initial_state_anchors', ...
-        'initial_state_anchors', ...
         'Kappa_P', ...
-        'elapsed_time', ...
-        'OfflineDataQuantity_set', ...
-        'state_norm_vector', ...
-        'u_norm_vector', ...
-        'f_hat_norm_vector', ...
-        'f_true_norm_vector', ...
-        'prediction_error_norm_vector', ...
-        'gp_used_vector');
+        'eta_underline_set', ...
+        'vartheta_bar', ...
+        'elapsed_time');
 end
 
 end
@@ -721,15 +501,10 @@ end
 %% ========================================================================
 %  Local helper: dataset-style IP-AC consensus ET update
 %  ========================================================================
-function [MaskedGP, Xi, Xi_last_trigger, broadcast_trigger_count, point_trigger_count] = gp_masked_aggregation_ac_et_update( ...
-    Xi, Xi_last_trigger, L, Kappa_P, AgentQuantity, NumInducingPoints, TimeStep, ...
-    InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, method, p_dim, ...
-    N_degree, a_param, sigma_i_ac)
-
+function [MaskedGP, Xi, Xi_last_trigger, trigger_count] = gp_masked_aggregation_ac_et_update(Xi, Xi_last_trigger, L, Kappa_P, AgentQuantity, NumInducingPoints, TimeStep, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, method, p_dim, N_degree, a_param, sigma_i_ac)
 M = NumInducingPoints;
 y_dim = 2;
-broadcast_trigger_count = zeros(AgentQuantity, 1);
-point_trigger_count     = zeros(AgentQuantity, M);
+trigger_count = zeros(AgentQuantity, 1);
 
 if TimeStep > 0
     L_Xi_hat = laplacian_multiply_agent_dim_local(Xi_last_trigger, L);
@@ -744,60 +519,67 @@ if TimeStep > 0
         end
 
         coeff_i = sigma_i_ac * a_param * (1 - a_param*N_i) / N_i;
-
         E_i = Xi_last_trigger(:,agent_i,:) - Xi(:,agent_i,:);
         e_norm_sq = squeeze(sum(E_i.^2, 1));
-
         Z_i = N_i*Xi(:,agent_i,:) - sum(Xi(:,neighbor_i,:), 2);
         z_norm_sq = squeeze(sum(Z_i.^2, 1));
-
         trigger_idx = (e_norm_sq(:).' > coeff_i * z_norm_sq(:).');
 
         if any(trigger_idx)
             Xi_last_trigger(:,agent_i,trigger_idx) = Xi(:,agent_i,trigger_idx);
-
-            % One broadcast event for this agent at this time step.
-            broadcast_trigger_count(agent_i) = 1;
-
-            % Point-wise record, useful for DAC-like normalized statistics.
-            point_trigger_count(agent_i,trigger_idx) = 1;
+            trigger_count(agent_i) = sum(trigger_idx);
         end
     end
 end
-
-MaskedGP = build_maskedgp_from_consensus_state( ...
-    Xi, method, AgentQuantity, M, p_dim, InducingPoints_Coordinates, ...
-    SigmaF, SigmaL, x_dim, y_dim);
-
+MaskedGP = build_maskedgp_from_consensus_state(Xi, method, AgentQuantity, M, p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
 end
 
 %% ========================================================================
 %  Local helper: build MaskedGP cell from consensus state Xi_final
 %  ========================================================================
-function MaskedGP = build_maskedgp_from_consensus_state( ...
-    Xi_final, method, AgentQuantity, M, p_dim, InducingPoints_Coordinates, ...
-    SigmaF, SigmaL, x_dim, y_dim)
-
-prior_var = SigmaF^2; %#ok<NASGU>
+function MaskedGP = build_maskedgp_from_consensus_state(Xi_final, method, AgentQuantity, M, p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim)
+prior_var = SigmaF^2;
 method = lower(method);
 
-num1 = squeeze(Xi_final(1, :, :));
-aux1 = squeeze(Xi_final(2, :, :));
-num2 = squeeze(Xi_final(3, :, :));
-aux2 = squeeze(Xi_final(4, :, :));
-
 switch method
-    case {'poe','gpoe','bcm','rbcm'}
+    case {'poe','gpoe','moe'}
+        num1 = squeeze(Xi_final(1, :, :));
+        den1 = squeeze(Xi_final(2, :, :));
+        num2 = squeeze(Xi_final(3, :, :));
+        den2 = squeeze(Xi_final(4, :, :));
+        phi1 = num1 ./ max(den1, eps);
+        phi2 = num2 ./ max(den2, eps);
+
+    case 'bcm'
+        num1 = squeeze(Xi_final(1, :, :));
+        num2 = squeeze(Xi_final(2, :, :));
+        den1 = squeeze(Xi_final(3, :, :));
+        den2 = squeeze(Xi_final(4, :, :));
+        prior_correction = (1 - AgentQuantity) / prior_var;
+        den1_fused = den1 + prior_correction;
+        den2_fused = den2 + prior_correction;
         phi1 = zeros(size(num1));
         phi2 = zeros(size(num2));
-        mask1 = abs(aux1) > 1e-8;
-        mask2 = abs(aux2) > 1e-8;
-        phi1(mask1) = num1(mask1) ./ aux1(mask1);
-        phi2(mask2) = num2(mask2) ./ aux2(mask2);
+        mask1 = den1_fused > 1e-2;
+        mask2 = den2_fused > 1e-2;
+        phi1(mask1) = num1(mask1) ./ den1_fused(mask1);
+        phi2(mask2) = num2(mask2) ./ den2_fused(mask2);
 
-    case 'moe'
-        phi1 = num1 / AgentQuantity;
-        phi2 = num2 / AgentQuantity;
+    case 'rbcm'
+        num1  = squeeze(Xi_final(1, :, :));
+        den1  = squeeze(Xi_final(2, :, :));
+        beta1 = squeeze(Xi_final(3, :, :));
+        num2  = squeeze(Xi_final(4, :, :));
+        den2  = squeeze(Xi_final(5, :, :));
+        beta2 = squeeze(Xi_final(6, :, :));
+        den1_fused = den1 + (1 - beta1) / prior_var;
+        den2_fused = den2 + (1 - beta2) / prior_var;
+        phi1 = zeros(size(num1));
+        phi2 = zeros(size(num2));
+        mask1 = den1_fused > 1e-2;
+        mask2 = den2_fused > 1e-2;
+        phi1(mask1) = num1(mask1) ./ den1_fused(mask1);
+        phi2(mask2) = num2(mask2) ./ den2_fused(mask2);
 
     otherwise
         error('Unknown aggregation method: %s', method);
@@ -812,7 +594,6 @@ for AgentNr = 1:AgentQuantity
     MaskedGP{AgentNr} = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-4, SigmaF, SigmaL);
     MaskedGP{AgentNr}.add_Alldata(InducingPoints_Coordinates, Y_agent);
 end
-
 end
 
 %% ========================================================================

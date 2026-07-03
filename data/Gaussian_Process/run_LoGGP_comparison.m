@@ -77,8 +77,8 @@ Target_Fill_Rate   = 0.50;
 % 即：每个节点最多装 100 个点，但我们只给它塞 40 个点就分裂
 Max_LocalGP_DataQuantity = floor(Node_Capacity * Target_Fill_Rate); 
 
-Max_LocalGP_Quantity     = 1500; 
-methods = {'MOE', 'GPOE'};
+Max_LocalGP_Quantity     = 36; 
+methods = {'MOE', 'GPOE', 'POE', 'BCM', 'RBCM'};
 
 %% 4. 保存路径
 SaveFolder = fullfile('Result', 'Dataset', DatasetName);
@@ -163,7 +163,7 @@ fprintf('\n%s\n', repmat('=', 1, 78));
 fprintf('  %-12s  %8s  %8s  %8s  %12s  %12s\n', ...
     'Method', 'SMSE', 'RMSE', 'NLPD', 'Train(ms/pt)', 'Test(ms/pt)');
 fprintf('  %s\n', repmat('-', 1, 74));
-method_labels = {'LoG-MOE', 'LoG-GPOE'};
+method_labels = {'LoG-MOE', 'LoG-GPOE', 'LoG-POE', 'LoG-BCM', 'LoG-RBCM'};
 for mi = 1:numel(methods)
     fprintf('  %-12s  %8.4f  %8.4f  %8.4f  %12.2f  %12.2f\n', ...
         method_labels{mi}, results(mi,1), results(mi,2), ...

@@ -178,7 +178,7 @@ for mi=1:numel(method_list)
         end
     end
 
-    t_test = Precompute_Time/numel(method_list) + toc;
+    t_test = Precompute_Time + toc;
 
     %% 8. 反归一化 & 误差计算
     mu_pred  = Final_Mean .* repmat(Y_std, N_eval, 1) + repmat(Y_mean, N_eval, 1);

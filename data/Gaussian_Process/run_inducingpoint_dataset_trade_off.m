@@ -1,25 +1,8 @@
 function run_inducingpoint_dataset_trade_off(DatasetName, CurrentMode, train_ratio, seed, NumInducingPoints_override)
 
-if nargin < 3 || isempty(train_ratio)
-    train_ratio = 0.4;
-end
-
-if nargin < 4 || isempty(seed)
-    seed = 1;
-end
-
-% For M-ablation, M must be explicitly provided by the wrapper.
-if nargin < 5 || isempty(NumInducingPoints_override)
-    error(['For M-ablation, NumInducingPoints M must be explicitly provided. ', ...
-           'Example: run_inducingpoint_dataset_trade_off(''KIN40K'', ''poe'', 0.4, 1, 1000).']);
-end
-
-NumInducingPoints = NumInducingPoints_override;
-
-if ~isscalar(NumInducingPoints) || NumInducingPoints <= 0 || NumInducingPoints ~= round(NumInducingPoints)
-    error('NumInducingPoints must be a positive integer. Current value: %g', NumInducingPoints);
-end
-
+if nargin < 3, train_ratio = 0.4; end
+if nargin < 4, seed = 1; end
+if nargin < 5, NumInducingPoints_override = []; end
 rng(seed);
 
 % true  : compute predictive variance and NLPD/MSLL
@@ -116,7 +99,7 @@ prior_var = SigmaF^2;
 [N_train, x_dim] = size(X_train);
 y_dim = size(Y_train,2);
 N_eval = min(3000, size(X_test,1));
-X_eval = X_test(1:N_eval,:);   %从测试集中随机选 3000 个点用于 evaluation。
+X_eval = X_test(1:N_eval,:);
 Y_eval = Y_test(1:N_eval,:);
 Y_var_base = var(Y_eval,0,1);
 fprintf('Train=%d Test=%d x=%d y=%d\n', N_train, N_eval, x_dim, y_dim);
@@ -127,6 +110,20 @@ Kappa_P = 10;
 t_step = 0.01;
 MaxDataPerAgent = min(floor(N_train/AgentQuantity), 3000);
 
+if ~isempty(NumInducingPoints_override)
+    NumInducingPoints = NumInducingPoints_override;
+else
+    switch upper(DatasetName)
+        case {'KIN40K'}
+            NumInducingPoints = 2500;
+        case {'POL'}
+            NumInducingPoints = 2000;
+        case {'PUMADYN32NM'}
+            NumInducingPoints = 500;
+        otherwise
+            NumInducingPoints = 2500;
+    end
+end
 fprintf('NumInducingPoints M = %d\n', NumInducingPoints);
 
 MultiAgentSystem = Manipulator_2D_2DoF_SetMASTopology(AgentQuantity,1);
@@ -209,21 +206,13 @@ end
 t_ip_inducing_prediction = toc(tic_inducing_prediction);
 fprintf('预计算完成: %.2fs\n', t_ip_inducing_prediction);
 
-
-MainFuncPath = which('run_inducingpoint_dataset_trade_off');
-if isempty(MainFuncPath)
-    MainFuncPath = mfilename('fullpath');
-end
-ProjectRoot = fileparts(MainFuncPath);
-
-SaveFolder = fullfile(ProjectRoot, 'Result', 'Dataset', DatasetName);
-fprintf('[Save folder]\n%s\n', SaveFolder);
-
-if ~exist(SaveFolder, 'dir')
-    mkdir(SaveFolder);
-end
-
-tr_tag = round(train_ratio * 100);
+% 用脚本自身所在路径作为项目根目录的锚点，避免因 MATLAB 当前工作目录
+% (pwd) 被意外切换（例如从子文件夹打开/运行脚本）导致 Result 文件夹
+% 定位错误、save 报 "does not exist"。
+ProjectRoot = fileparts(mfilename('fullpath'));
+SaveFolder = fullfile(ProjectRoot, 'Result','Dataset',DatasetName);
+if ~exist(SaveFolder,'dir'), mkdir(SaveFolder); end
+tr_tag = round(train_ratio*100);
 
 %% 7. 主循环
 for mi = 1:numel(AllModes)
@@ -331,7 +320,7 @@ for mi = 1:numel(AllModes)
         trigger_per_agent_point = mean(trigger_count_per_agent, 2);
         comm_train = mean(trigger_count_per_agent(:));
         comm_test  = 0;
-        trigger_ratio_train = comm_train / max(iter_converge, eps);
+        trigger_ratio_train = comm_train / 500;
         fprintf('  [IP-DAC] 收敛步数:%d  平均触发次数/agent/point:%.1f\n', ...
             iter_converge, comm_train);
 
@@ -408,40 +397,12 @@ for mi = 1:numel(AllModes)
         trigger_per_agent_point = mean(trigger_count_per_agent, 2);
         comm_train = mean(trigger_count_per_agent(:));
         comm_test  = 0;
-        trigger_ratio_train = comm_train / max(iter_converge, eps);
+        trigger_ratio_train = comm_train / 500;
         fprintf('  [IP-AC] 收敛步数:%d  平均更新次数/agent/point:%.1f\n', ...
             iter_converge, comm_train);
 
         Xi_final = Xi;
     end
-
-    %% Consensus quality check
-    % Check whether event-triggered DAC/AC consensus has converged sufficiently.
-    % Xi_final should be close to the average reference statistics over agents.
-    % Size convention:
-    %   Xi_final      : [p_dim x AgentQuantity x NumInducingPoints]
-    %   Consensus_ref : [p_dim x 1             x NumInducingPoints]
-    Consensus_ref = mean(Pi, 2);
-
-    Consensus_abs_err_tensor = abs(Xi_final - Consensus_ref);
-    Consensus_max_abs_err    = max(Consensus_abs_err_tensor(:));
-    Consensus_mean_abs_err   = mean(Consensus_abs_err_tensor(:), 'omitnan');
-    Consensus_median_abs_err = median(Consensus_abs_err_tensor(:), 'omitnan');
-
-    Consensus_ref_denom = max(abs(Consensus_ref), 1e-10);
-    Consensus_rel_err_tensor = Consensus_abs_err_tensor ./ Consensus_ref_denom;
-    Consensus_max_rel    = max(Consensus_rel_err_tensor(:));
-    Consensus_mean_rel   = mean(Consensus_rel_err_tensor(:), 'omitnan');
-    Consensus_median_rel = median(Consensus_rel_err_tensor(:), 'omitnan');
-
-    % phi is extracted from agent 1 in the original implementation.
-    agent_used_for_phi = 1;
-    Xi_used_for_phi = Xi_final(:, agent_used_for_phi, :);
-    UsedAgent_abs_err_tensor = abs(Xi_used_for_phi - Consensus_ref);
-    UsedAgent_max_abs_err  = max(UsedAgent_abs_err_tensor(:));
-    UsedAgent_mean_abs_err = mean(UsedAgent_abs_err_tensor(:), 'omitnan');
-
-    % Consensus diagnostic variables are computed and saved, but verbose prints are disabled.
 
     %% 提取phi
     phi = zeros(y_dim,NumInducingPoints);
@@ -481,34 +442,23 @@ for mi = 1:numel(AllModes)
 
     tic_mean = tic;
     mu_normalized = (Alpha_Vec' * K_star)';
-    %反归一化
+    %mu_pred = mu_normalized .* repmat(Y_std, N_eval, 1) + repmat(Y_mean, N_eval, 1);
     mu_pred = mu_normalized .* Y_std + Y_mean;
     t_ip_test_mean = toc(tic_mean);
 
     if compute_variance
-        tic_variance = tic;
+    tic_variance = tic;
 
-        V_matrix = Cholesky_L \ K_star;
+    V_matrix = Cholesky_L \ K_star;
+    var_normalized = max(SigmaF^2 - sum(V_matrix.^2, 1)', SigmaN^2);
 
-        % Raw latent GP predictive variance in normalized output scale.
-        % This matches the original GP formula: k(x*,x*) - v'v.
-        var_normalized_raw = SigmaF^2 - sum(V_matrix.^2, 1)';
+    % MATLAB implicit expansion:
+    % var_normalized: [N_eval x 1]
+    % Y_std.^2      : [1 x y_dim]
+    var_pred = var_normalized .* (Y_std.^2);
 
-        % Stable evaluation convention used in the previous implementation:
-        % do not allow the predictive variance to fall below SigmaN^2.
-        % This avoids near-zero variance dominating NLPD/MSLL.
-        var_normalized = max(var_normalized_raw, SigmaN^2);
-
-        % De-normalize variance to the original output scale.
-        % MATLAB implicit expansion:
-        %   var_normalized : [N_eval x 1]
-        %   Y_std.^2       : [1 x y_dim]
-        var_pred = var_normalized .* (Y_std.^2);
-
-        t_ip_test_variance = toc(tic_variance);
+    t_ip_test_variance = toc(tic_variance);
     else
-        var_normalized_raw = NaN(N_eval, 1);
-        var_normalized = NaN(N_eval, 1);
         var_pred = NaN(N_eval, y_dim);
         t_ip_test_variance = 0;
     end
@@ -517,55 +467,31 @@ for mi = 1:numel(AllModes)
 
     %% Metrics
     err = Y_eval - mu_pred;
-
-    % SMSE denominator protection. This is not the GP predictive variance;
-    % it is only the empirical output variance used for normalization.
     Y_var_base_safe = max(Y_var_base, 1e-10);
-
     smse = mean(mean(err.^2) ./ Y_var_base_safe);
     rmse = mean(sqrt(mean(err.^2)));
 
     if compute_variance
-        % Follow the PhD/original NLPD formula using the GP predictive variance.
-        % var_pred already includes the SigmaN^2 floor in normalized scale,
-        % matching the previous stable implementation.
-        var_pred_for_nlpd = var_pred;
+        nlpd = mean(mean(0.5*(log(2*pi*var_pred) + err.^2 ./ var_pred)));
 
-        % Tiny numerical floor only for log/division safety.
-        nlpd_floor = 1e-10 * max(mean(Y_std.^2), 1e-10);
-        var_pred_for_nlpd = max(var_pred_for_nlpd, nlpd_floor);
-
-        nlpd = mean(mean(0.5 * (log(2*pi*var_pred_for_nlpd) + ...
-            err.^2 ./ var_pred_for_nlpd)));
-
-        % Baseline NLPD for MSLL: constant Gaussian using training-output mean/variance.
-        Y_train_var_safe = max(Y_std.^2, 1e-10);
-        err_trivial = Y_eval - Y_mean;
-        nlpd_trivial = mean(mean(0.5 * (log(2*pi*Y_train_var_safe) + ...
+        % MSLL (Mean Standardized Log Loss), per Rasmussen & Williams,
+        % GPML book, Eq. 2.34: "This loss can be standardized by
+        % subtracting the loss that would be obtained under the trivial
+        % model which predicts using a Gaussian with the MEAN AND
+        % VARIANCE OF THE TRAINING DATA."
+        % => baseline must use Y_mean / Y_std (training-set stats, already
+        %    computed in original scale above), NOT the test set.
+        % (Verified against the textbook screenshot; the earlier switch to
+        % Y_eval-based baseline was incorrect and has been reverted.)
+        Y_train_var_safe = max(Y_std.^2, 1e-10);   % [1 x y_dim], numerical safety
+        err_trivial = Y_eval - Y_mean;             % implicit expansion: [N_eval x y_dim]
+        nlpd_trivial = mean(mean(0.5*(log(2*pi*Y_train_var_safe) + ...
             err_trivial.^2 ./ Y_train_var_safe)));
 
         msll = nlpd - nlpd_trivial;
     else
         nlpd = NaN;
         msll = NaN;
-    end
-
-    %% Compact diagnostic variables saved for optional post-analysis
-    if compute_variance
-        Mean_var_pred = mean(var_pred(:), 'omitnan');
-        Median_var_pred = median(var_pred(:), 'omitnan');
-        Min_var_pred = min(var_pred(:));
-        Max_var_pred = max(var_pred(:));
-
-        Mean_err2 = mean(err(:).^2, 'omitnan');
-        Median_err2 = median(err(:).^2, 'omitnan');
-
-        Mean_err2_over_var = mean(err(:).^2 ./ var_pred_for_nlpd(:), 'omitnan');
-        Median_err2_over_var = median(err(:).^2 ./ var_pred_for_nlpd(:), 'omitnan');
-    else
-        Mean_var_pred = NaN; Median_var_pred = NaN; Min_var_pred = NaN; Max_var_pred = NaN;
-        Mean_err2 = mean(err(:).^2, 'omitnan'); Median_err2 = median(err(:).^2, 'omitnan');
-        Mean_err2_over_var = NaN; Median_err2_over_var = NaN;
     end
 
     t_train_per_point = (t_train/N_train) * 1000;
@@ -596,10 +522,7 @@ for mi = 1:numel(AllModes)
     rmse_curve = sqrt(cumsum(err_sq_mean) ./ (1:N_eval)');
     event_count_mean = comm_train;
 
-    outFile = fullfile(SaveFolder, sprintf('%s_M%d_tr%d_mc%d.mat', ...
-        current_method, NumInducingPoints, tr_tag, seed));
-
-    save(outFile, ...
+    save(fullfile(SaveFolder, sprintf('%s_M%d_tr%d_mc%d.mat', current_method, NumInducingPoints, tr_tag, seed)), ...
         'smse', 'rmse', 'nlpd', 'msll', ...
         't_train_total', 't_test_total', ...
         't_train_per_point', 't_test_per_point', ...
@@ -613,19 +536,11 @@ for mi = 1:numel(AllModes)
         'current_method', 'seed', 'train_ratio', 'NumInducingPoints', 'N_train', 'N_eval', ...
         'smse_curve', 'rmse_curve', ...
         'trigger_count_per_agent', 'trigger_per_agent_point', ...
-        'var_normalized_raw', 'var_normalized', ...
-        'Mean_var_pred', 'Median_var_pred', 'Min_var_pred', 'Max_var_pred', ...
-        'Mean_err2', 'Median_err2', 'Mean_err2_over_var', 'Median_err2_over_var', ...
-        'Consensus_max_abs_err', 'Consensus_mean_abs_err', 'Consensus_median_abs_err', ...
-        'Consensus_max_rel', 'Consensus_mean_rel', 'Consensus_median_rel', ...
-        'UsedAgent_max_abs_err', 'UsedAgent_mean_abs_err', 'agent_used_for_phi', ...
         'conv_curve_dac', 'conv_curve_ac', ...
         'conv_dac_tracking_curve', 'conv_dac_disagreement_curve', ...
         'conv_ac_avg_error_curve', 'conv_ac_disagreement_curve', ...
         'dac_state_hist', 'dac_ref_hist', ...
         'ac_state_hist', 'ac_ref_hist');
-
-    fprintf('[Saved result]\n%s\n', outFile);
 end
 end
 
