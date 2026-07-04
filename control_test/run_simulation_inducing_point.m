@@ -1,4 +1,4 @@
-function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation, simulation_end_time)
+function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation, simulation_end_time, num_inducing_points)
 % Pure inducing-point online-learning simulation.
 %
 % Purpose of this version:
@@ -36,6 +36,11 @@ end
 if nargin < 5 || isempty(simulation_end_time)
     simulation_end_time = 10;
 end
+if nargin < 6 || isempty(num_inducing_points)
+    num_inducing_points = 400;
+end
+validateattributes(num_inducing_points, {'numeric'}, ...
+    {'scalar','integer','positive','finite'}, mfilename, 'num_inducing_points');
 if nargin < 2 || isempty(SaveFolderName)
     SaveFolderName = '';
 end
@@ -49,7 +54,7 @@ end
 rng(0);
 
 %% Fixed algorithm parameters
-ProjectionUpdatePeriod = 50;     % 50 steps with dt=0.01 -> refresh every 0.5 s
+ProjectionUpdatePeriod = 1;      % time-triggered reference update at every simulation step
 ConsensusMaxIter = 3000;
 ConsensusTol = 1e-5;
 
@@ -183,7 +188,9 @@ else
 end
 
 Kappa_P = 1;
-NumInducingPoints = 400;
+DACAlpha = 1;
+DACBeta = Kappa_P;
+NumInducingPoints = num_inducing_points;
 InducingPoints_Coordinates = 2*DomainScale*rand(x_dim, NumInducingPoints) - DomainScale;
 
 % Kia et al. connected-undirected-graph trigger parameter.
@@ -210,10 +217,20 @@ MaskedGP = [];
 Xi_final = [];
 P_inducing = [];
 p_dim = [];
+Xi_last_trigger = [];
+Xi_dac = [];
+V_dac = [];
+P_previous = [];
+dac_total_trigger_count = zeros(AgentQuantity,1);
+max_dac_v_balance_error = 0;
 
 fprintf('Mode: %s. Projection refresh every %d steps.\n', CurrentMode, ProjectionUpdatePeriod);
 if is_ip_mode
-    fprintf('Control source: shared inducing-point MaskedGP.\n');
+    if is_dac_mode
+        fprintf('Control source: per-agent MaskedGP driven by persistent IP-DAC states.\n');
+    else
+        fprintf('Control source: shared inducing-point MaskedGP.\n');
+    end
 elseif is_local_mode
     fprintf('Control source: LocalGP baseline.\n');
 elseif is_exact_mode
@@ -267,17 +284,42 @@ for t_Nr = 1:T-1
             InducingPoints_Coordinates, base_method);
 
         if is_dac_mode
-            Xi_final = ip_dac_consensus_kia(P_inducing, L_lap, Kappa_P, t_step, ...
-                ConsensusMaxIter, ConsensusTol, N_degree, epsilon_i);
+            if isempty(Xi_dac)
+                Xi_dac = P_inducing;
+                V_dac = zeros(size(P_inducing));
+                Xi_last_trigger = P_inducing;
+                P_previous = P_inducing;
+                step_trigger_count = NumInducingPoints * ones(AgentQuantity,1);
+            else
+                [Xi_dac, V_dac, Xi_last_trigger, step_trigger_count] = ...
+                    ip_dac_kia_paper_step(P_inducing, P_previous, Xi_dac, V_dac, ...
+                    Xi_last_trigger, L_lap, t_step, DACAlpha, DACBeta, epsilon_i);
+                P_previous = P_inducing;
+            end
+
+            Xi_final = Xi_dac;
+            max_dac_v_balance_error = max(max_dac_v_balance_error, ...
+                max(abs(sum(V_dac,2)),[],'all'));
+            MaskedGP = build_agent_maskedgp_from_xi(Xi_final, base_method, ...
+                AgentQuantity, NumInducingPoints, p_dim, InducingPoints_Coordinates, ...
+                SigmaF, SigmaL, x_dim, y_dim);
+            dac_total_trigger_count = dac_total_trigger_count + step_trigger_count;
         else
             Xi_final = ip_ac_consensus_kia(P_inducing, L_lap, Kappa_P, t_step, ...
                 ConsensusMaxIter, ConsensusTol, N_degree, epsilon_i);
+            MaskedGP = build_shared_maskedgp_from_xi(Xi_final, base_method, AgentQuantity, ...
+                NumInducingPoints, p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
         end
 
-        MaskedGP = build_shared_maskedgp_from_xi(Xi_final, base_method, AgentQuantity, ...
-            NumInducingPoints, p_dim, InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
-
-        fprintf('Projection update at t = %.2f, MaskedGP data = %d.\n', t, MaskedGP.DataQuantity);
+        if mod(t_Nr-1,100) == 0
+            if iscell(MaskedGP)
+                masked_data_quantity = MaskedGP{1}.DataQuantity;
+            else
+                masked_data_quantity = MaskedGP.DataQuantity;
+            end
+            fprintf('Projection update at t = %.2f, MaskedGP data = %d.\n', ...
+                t, masked_data_quantity);
+        end
     end
 
     %% 9.3 Consensus law for tracking controller
@@ -286,11 +328,19 @@ for t_Nr = 1:T-1
 
     %% 9.4 Prediction used by controller
     if is_ip_mode
-        if isempty(MaskedGP) || MaskedGP.DataQuantity == 0
+        if isempty(MaskedGP)
             error('MaskedGP has not been initialized before control prediction.');
         end
         for AgentNr = 1:AgentQuantity
-            [mu_hat, ~] = MaskedGP.predict(x_all_matrix(:,AgentNr));
+            if iscell(MaskedGP)
+                current_masked_gp = MaskedGP{AgentNr};
+            else
+                current_masked_gp = MaskedGP;
+            end
+            if current_masked_gp.DataQuantity == 0
+                error('MaskedGP has no inducing-point data before control prediction.');
+            end
+            [mu_hat, ~] = current_masked_gp.predict(x_all_matrix(:,AgentNr));
             mu_hat(~isfinite(mu_hat)) = 0;
             f_hat_matrix(:,AgentNr) = real(mu_hat);
         end
@@ -369,6 +419,11 @@ fprintf('Final tracking error: %.6f\n', TrackingError_vector(end));
 fprintf('Online updates: %.0f / agent\n', mean(online_update_count));
 fprintf('UnknownScale: %.3f, DisturbanceScale: %.3f\n', UnknownScale, DisturbanceScale);
 fprintf('Projection updates: %d\n', sum(projection_update_set));
+if is_dac_mode
+    fprintf('DAC broadcasts: %.0f total, %.2f per agent.\n', ...
+        sum(dac_total_trigger_count), mean(dac_total_trigger_count));
+    fprintf('Max DAC sum(v) invariant error: %.3e.\n', max_dac_v_balance_error);
+end
 if any(isfinite(prediction_error_norm_vector))
     [max_pred_err, idx] = max(prediction_error_norm_vector);
     fprintf('Max controller prediction error: %.6f at t=%.4f\n', max_pred_err, t_set(idx));
@@ -381,34 +436,76 @@ if ~isempty(SaveFolderName) && ~isempty(SaveFileName)
         'x_all_set', 'vartheta_all_set', 'prediction_error_norm_vector', ...
         'online_update_count', 'projection_update_set', ...
         'UnknownScale', 'DisturbanceScale', ...
-        'InducingPoints_Coordinates', 'P_inducing', 'Xi_final', 'elapsed_time');
+        'InducingPoints_Coordinates', 'P_inducing', 'Xi_final', 'elapsed_time', ...
+        'dac_total_trigger_count', 'DACAlpha', 'DACBeta', ...
+        'max_dac_v_balance_error');
 end
 
 end
 
 %% ========================================================================
-% IP-DAC with Kia-style event-triggered communication
+% One Euler step of Kia-Cortes-Martinez (2014), equations (3) and (17)
 % ========================================================================
-function Xi_final = ip_dac_consensus_kia(Pi, L, Kappa_P, t_step, max_iter, tol, N_degree, epsilon_i)
-[p_dim, AgentQuantity, NumInducingPoints] = size(Pi);
-Zeta = zeros(p_dim, AgentQuantity, NumInducingPoints);
-Xi_hat = Pi;
+function [Xi_next, V_next, Xi_hat_next, trigger_count] = ...
+    ip_dac_kia_paper_step(P, P_previous, Xi, V, Xi_hat, L, dt, alpha, beta, epsilon_i)
 
-for iter = 1:max_iter
-    Zeta_prev = Zeta;
+[~, agent_quantity, num_points] = size(P);
+L_Xi_hat = laplacian_multiply_agent_dim_local(Xi_hat, L);
 
-    L_Xi_hat = laplacian_multiply_agent_dim_local(Xi_hat, L);
-    Zeta = Zeta + t_step * Kappa_P * L_Xi_hat;
-    Xi = Pi - Zeta;
+% Paper (3), discretized with forward Euler.  The input derivative term is
+% integrated exactly over one sample as P(k)-P(k-1).
+V_next = V + dt * alpha * beta * L_Xi_hat;
+Xi_next = Xi + (P - P_previous) - ...
+    dt * (alpha * (Xi - P) + beta * L_Xi_hat + V);
 
-    Xi_hat = kia_trigger_update(Xi, Xi_hat, L, N_degree, epsilon_i, iter);
+Xi_hat_next = Xi_hat;
+trigger_count = zeros(agent_quantity,1);
 
-    if max(abs(Zeta(:) - Zeta_prev(:))) < tol
-        break;
+% Paper (17), evaluated independently for each inducing point.  For the
+% undirected weighted graph, a_ij=-L_ij and d_out_i=L_ii.
+for agent_i = 1:agent_quantity
+    neighbor_mask = L(agent_i,:) < 0;
+    d_out_i = L(agent_i,agent_i);
+    if d_out_i <= 0 || ~any(neighbor_mask)
+        continue;
+    end
+
+    E_i = Xi_hat(:,agent_i,:) - Xi_next(:,agent_i,:);
+    e_norm_sq = squeeze(sum(E_i.^2,1));
+    e_norm_sq = e_norm_sq(:).';
+
+    neighbor_idx = find(neighbor_mask);
+    weighted_disagreement = zeros(1,num_points);
+    for jj = 1:numel(neighbor_idx)
+        agent_j = neighbor_idx(jj);
+        a_ij = -L(agent_i,agent_j);
+        D_ij = Xi_hat(:,agent_i,:) - Xi_hat(:,agent_j,:);
+        weighted_disagreement = weighted_disagreement + ...
+            a_ij * squeeze(sum(D_ij.^2,1)).';
+    end
+
+    threshold = weighted_disagreement / (4*d_out_i) + ...
+        epsilon_i(agent_i)^2 / (4*d_out_i);
+    trigger_idx = e_norm_sq > threshold;
+    if any(trigger_idx)
+        Xi_hat_next(:,agent_i,trigger_idx) = Xi_next(:,agent_i,trigger_idx);
+        trigger_count(agent_i) = nnz(trigger_idx);
     end
 end
+end
 
-Xi_final = Pi - Zeta;
+%% ========================================================================
+% Rebuild one inducing-point GP for each agent from its current DAC output
+% ========================================================================
+function MaskedGP = build_agent_maskedgp_from_xi(Xi, method, AgentQuantity, M, p_dim, ...
+    InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim)
+
+MaskedGP = cell(AgentQuantity,1);
+for AgentNr = 1:AgentQuantity
+    Xi_agent = Xi(:,AgentNr,:);
+    MaskedGP{AgentNr} = build_shared_maskedgp_from_xi(Xi_agent, method, AgentQuantity, M, p_dim, ...
+        InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
+end
 end
 
 %% ========================================================================
