@@ -1,4 +1,4 @@
-function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation)
+function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation, simulation_end_time)
 % Pure inducing-point online-learning simulation.
 %
 % Purpose of this version:
@@ -33,6 +33,9 @@ fprintf('Using PURE_SCALED_UNKNOWN_KIA_IPCONTROL.\n');
 if nargin < 4
     use_formation = true;
 end
+if nargin < 5 || isempty(simulation_end_time)
+    simulation_end_time = 10;
+end
 if nargin < 2 || isempty(SaveFolderName)
     SaveFolderName = '';
 end
@@ -51,11 +54,10 @@ ConsensusMaxIter = 3000;
 ConsensusTol = 1e-5;
 
 % Scaling test suggested for numerical robustness.
-% UnknownScale scales the unknown dynamics used for GP labels and prediction-error evaluation
-% in this script. If your physical dynamics function internally calls
-% Manipulator_2D_2DoF_UnknownDynamics, apply the same scale inside that function as well
-% for a fully consistent scaled-plant experiment.
+% UnknownScale scales the same unknown dynamics in the physical plant, GP labels,
+% exact-model prediction, and prediction-error evaluation.
 UnknownScale = 0.1;
+% DisturbanceScale scales only the GP observation noise.
 DisturbanceScale = 0.1;
 
 %% 1. System parameters
@@ -112,7 +114,7 @@ end
 % For advisor discussion, keep this normal 10 s horizon. For debugging, you
 % can temporarily change it to 1 or 2.
 t_start = 0;
-t_end = 10;
+t_end = simulation_end_time;
 t_step = 0.01;
 t_set = t_start:t_step:t_end;
 T = numel(t_set);
@@ -319,7 +321,7 @@ for t_Nr = 1:T-1
 
     [t_ode, x_all_temp] = ode45( ...
         @(current_time,current_state) Manipulator_2D_2DoF_MultiAgent_DynamicFunction( ...
-            current_time, current_state, u_cell, L1, L2, m1, m2), ...
+            current_time, current_state, u_cell, L1, L2, m1, m2, UnknownScale), ...
         [t, t+t_step], x_all, opts);
 
     if isempty(t_ode) || t_ode(end) < t + t_step - 1e-10
