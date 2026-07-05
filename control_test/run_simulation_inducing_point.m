@@ -229,7 +229,8 @@ elseif is_exact_mode
 end
 
 %% 9. Main loop
-opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3);
+opts = odeset('RelTol', 1e-3, 'AbsTol', 1e-3, ...
+    'InitialStep', t_step, 'MaxStep', t_step, 'Refine', 1);
 elapsed_tic = tic;
 
 for t_Nr = 1:T-1
