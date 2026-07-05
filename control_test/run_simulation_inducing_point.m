@@ -1,4 +1,4 @@
-function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation, simulation_end_time, num_inducing_points)
+function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMode, SaveFolderName, SaveFileName, use_formation)
 % Pure inducing-point online-learning simulation.
 %
 % Purpose of this version:
@@ -9,8 +9,8 @@ function [TrackingError_vector, t_set] = run_simulation_inducing_point(CurrentMo
 %   2) At every sampling instant t_k, each agent adds one online sample
 %          (x_i(t_k), y_i(t_k)),  y_i = UnknownScale*UnknownDynamics(x_i) + scaled noise.
 %      There is no lower-level learning event trigger.
-%   3) Every ProjectionUpdatePeriod steps, all LocalGPs are projected onto
-%      a fixed inducing-point set.
+%   3) At every simulation step, all LocalGPs are projected onto a fixed
+%      inducing-point set.
 %   4) The inducing-point statistics are aggregated by either IP-DAC or
 %      IP-AC using Kia et al. style asynchronous distributed event-triggered
 %      communication for connected undirected graphs.
@@ -33,14 +33,6 @@ fprintf('Using PURE_SCALED_UNKNOWN_KIA_IPCONTROL.\n');
 if nargin < 4
     use_formation = true;
 end
-if nargin < 5 || isempty(simulation_end_time)
-    simulation_end_time = 10;
-end
-if nargin < 6 || isempty(num_inducing_points)
-    num_inducing_points = 400;
-end
-validateattributes(num_inducing_points, {'numeric'}, ...
-    {'scalar','integer','positive','finite'}, mfilename, 'num_inducing_points');
 if nargin < 2 || isempty(SaveFolderName)
     SaveFolderName = '';
 end
@@ -54,7 +46,6 @@ end
 rng(0);
 
 %% Fixed algorithm parameters
-ProjectionUpdatePeriod = 1;      % time-triggered reference update at every simulation step
 ConsensusMaxIter = 3000;
 ConsensusTol = 1e-5;
 
@@ -119,7 +110,7 @@ end
 % For advisor discussion, keep this normal 10 s horizon. For debugging, you
 % can temporarily change it to 1 or 2.
 t_start = 0;
-t_end = simulation_end_time;
+t_end = 10;
 t_step = 0.01;
 t_set = t_start:t_step:t_end;
 T = numel(t_set);
@@ -190,7 +181,7 @@ end
 Kappa_P = 1;
 DACAlpha = 1;
 DACBeta = Kappa_P;
-NumInducingPoints = num_inducing_points;
+NumInducingPoints = 400;
 InducingPoints_Coordinates = 2*DomainScale*rand(x_dim, NumInducingPoints) - DomainScale;
 
 % Kia et al. connected-undirected-graph trigger parameter.
@@ -224,7 +215,7 @@ P_previous = [];
 dac_total_trigger_count = zeros(AgentQuantity,1);
 max_dac_v_balance_error = 0;
 
-fprintf('Mode: %s. Projection refresh every %d steps.\n', CurrentMode, ProjectionUpdatePeriod);
+fprintf('Mode: %s. Projection refresh: every simulation step.\n', CurrentMode);
 if is_ip_mode
     if is_dac_mode
         fprintf('Control source: per-agent MaskedGP driven by persistent IP-DAC states.\n');
@@ -276,7 +267,7 @@ for t_Nr = 1:T-1
     end
 
     %% 9.2 Inducing-point projection and Kia ET consensus
-    if is_ip_mode && (t_Nr == 1 || mod(t_Nr-1, ProjectionUpdatePeriod) == 0)
+    if is_ip_mode
         projection_update_set(t_Nr) = 1;
 
         [P_inducing, p_dim] = gp_masked_aggregation_init( ...
@@ -302,7 +293,7 @@ for t_Nr = 1:T-1
                 max(abs(sum(V_dac,2)),[],'all'));
             MaskedGP = build_agent_maskedgp_from_xi(Xi_final, base_method, ...
                 AgentQuantity, NumInducingPoints, p_dim, InducingPoints_Coordinates, ...
-                SigmaF, SigmaL, x_dim, y_dim);
+                SigmaF, SigmaL, x_dim, y_dim, MaskedGP);
             dac_total_trigger_count = dac_total_trigger_count + step_trigger_count;
         else
             Xi_final = ip_ac_consensus_kia(P_inducing, L_lap, Kappa_P, t_step, ...
@@ -498,14 +489,41 @@ end
 % Rebuild one inducing-point GP for each agent from its current DAC output
 % ========================================================================
 function MaskedGP = build_agent_maskedgp_from_xi(Xi, method, AgentQuantity, M, p_dim, ...
-    InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim)
+    InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim, MaskedGP)
 
-MaskedGP = cell(AgentQuantity,1);
+reuse_factorization = iscell(MaskedGP) && numel(MaskedGP) == AgentQuantity && ...
+    all(cellfun(@(gp) ~isempty(gp) && gp.DataQuantity == M, MaskedGP));
+
+if ~reuse_factorization
+    MaskedGP = cell(AgentQuantity,1);
+end
+
 for AgentNr = 1:AgentQuantity
     Xi_agent = Xi(:,AgentNr,:);
-    MaskedGP{AgentNr} = build_shared_maskedgp_from_xi(Xi_agent, method, AgentQuantity, M, p_dim, ...
-        InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim);
+    phi_agent = decode_phi_from_xi(Xi_agent, method, AgentQuantity, M, p_dim, y_dim);
+
+    if reuse_factorization
+        MaskedGP{AgentNr} = update_maskedgp_targets(MaskedGP{AgentNr}, phi_agent);
+    else
+        MaskedGP{AgentNr} = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-6, SigmaF, SigmaL);
+        MaskedGP{AgentNr}.add_Alldata(InducingPoints_Coordinates, phi_agent);
+    end
 end
+end
+
+%% ========================================================================
+% Update only GP targets when inducing inputs and hyperparameters are fixed
+% ========================================================================
+function MaskedGP = update_maskedgp_targets(MaskedGP, phi)
+M = MaskedGP.DataQuantity;
+Y = phi.';
+L = MaskedGP.L(1:M,1:M);
+aux_alpha = L \ Y;
+alpha = L' \ aux_alpha;
+
+MaskedGP.Y(1:M,:) = Y;
+MaskedGP.aux_alpha(1:M,:) = aux_alpha;
+MaskedGP.alpha(1:M,:) = alpha;
 end
 
 %% ========================================================================
@@ -577,6 +595,15 @@ end
 function MaskedGP = build_shared_maskedgp_from_xi(Xi_final, method, AgentQuantity, M, p_dim, ...
     InducingPoints_Coordinates, SigmaF, SigmaL, x_dim, y_dim)
 
+phi = decode_phi_from_xi(Xi_final, method, AgentQuantity, M, p_dim, y_dim);
+MaskedGP = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-6, SigmaF, SigmaL);
+MaskedGP.add_Alldata(InducingPoints_Coordinates, phi);
+end
+
+%% ========================================================================
+% Decode one agent's DAC information vector into inducing-point targets
+% ========================================================================
+function phi = decode_phi_from_xi(Xi_final, method, AgentQuantity, M, p_dim, y_dim)
 method = lower(method);
 phi = zeros(y_dim, M);
 
@@ -606,9 +633,6 @@ for d = 1:y_dim
 end
 
 phi(~isfinite(phi)) = 0;
-
-MaskedGP = LocalGP_MultiOutput(x_dim, y_dim, M, 1e-6, SigmaF, SigmaL);
-MaskedGP.add_Alldata(InducingPoints_Coordinates, phi);
 end
 
 %% ========================================================================

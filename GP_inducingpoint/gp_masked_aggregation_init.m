@@ -22,9 +22,12 @@ end
 P = zeros(p_dim, AgentQuantity, M);
 
 for AgentNr = 1:AgentQuantity
+    [mu_all, var_all] = predict_inducing_points_batch( ...
+        LocalGP_set{AgentNr}, InducingPoints_Coordinates);
+
     for InducingPointIdx = 1:M
-        x_m = InducingPoints_Coordinates(:, InducingPointIdx);  % x_dim x 1
-        [mu_n, var_n] = LocalGP_set{AgentNr}.predict(x_m);  % 2x1, 2x1
+        mu_n = mu_all(:,InducingPointIdx);
+        var_n = var_all(:,InducingPointIdx);
 
         mu1  = max(-30, min(30, mu_n(1)));
         var1 = max(var_n(1), 1e-3);
@@ -73,4 +76,24 @@ for AgentNr = 1:AgentQuantity
         end
     end
 end
+end
+
+function [mu, var] = predict_inducing_points_batch(gp, X_query)
+% Vectorized equivalent of repeated gp.predict calls for mean/variance.
+M = size(X_query,2);
+if gp.DataQuantity == 0
+    mu = zeros(gp.y_dim,M);
+    var = gp.SigmaF^2 * ones(gp.y_dim,M);
+    return;
+end
+
+N = gp.DataQuantity;
+X_train = gp.X(:,1:N);
+K_star = gp.kernel(X_train,X_query);
+L = gp.L(1:N,1:N);
+V = L \ K_star;
+
+mu = gp.alpha(1:N,:)' * K_star;
+var_scalar = max(gp.SigmaF^2 - sum(V.^2,1),0);
+var = repmat(var_scalar,gp.y_dim,1);
 end
