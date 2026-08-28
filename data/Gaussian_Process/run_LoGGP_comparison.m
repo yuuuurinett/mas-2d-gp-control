@@ -1,5 +1,5 @@
 function run_LoGGP_comparison(DatasetName, train_ratio, seed)
-%  用 LoG_GP_MultiOutput 在数据集上对比 MOE 和 GPOE 两种聚合方式
+%  用 LoG_GP_MultiOutput 在数据集上对比 MOE/GPOE/POE/BCM/RBCM 聚合方式
 %  DatasetName : 'KIN40K' | 'POL' | 'PUMADYN32NM' | 'SARCOS'
 %  train_ratio : 训练集比例，默认 0.4
 %  seed        : 随机种子（Monte Carlo 编号），默认 1

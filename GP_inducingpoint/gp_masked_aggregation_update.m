@@ -107,8 +107,8 @@ aux2 = squeeze(Xi_all(4, :, :));
 
 switch method
     case {'poe','gpoe','bcm','rbcm'}
-        phi1 = safe_divide(num1, aux1);
-        phi2 = safe_divide(num2, aux2);
+        phi1 = safe_positive_precision_divide(num1, aux1);
+        phi2 = safe_positive_precision_divide(num2, aux2);
 
     case 'moe'
         phi1 = num1 / AgentQuantity;
@@ -150,9 +150,11 @@ L_X_agent_first = reshape(L_X_flat, AgentQuantity, p_dim, NumPoints);
 L_X = permute(L_X_agent_first, [2, 1, 3]);          % [p_dim x Agent x M]
 end
 
-%% Helper: numerically safe division
-function out = safe_divide(num, den)
+%% Helper: numerically safe division for precision-form GP aggregation
+function out = safe_positive_precision_divide(num, den)
+aggregation_cfg = control_aggregation_parameters();
+precision_floor = aggregation_cfg.precision_floor;
 out = zeros(size(num));
-mask = abs(den) > 1e-8;
-out(mask) = num(mask) ./ den(mask);
+valid = den > precision_floor;
+out(valid) = num(valid) ./ den(valid);
 end

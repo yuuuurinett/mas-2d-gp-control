@@ -9,6 +9,10 @@ method = lower(method);
 M = NumInducingPoints;
 prior_var = LocalGP_set{AgentNr}.SigmaF^2;
 y_dim = 2;
+aggregation_cfg = control_aggregation_parameters();
+posterior_var_floor = aggregation_cfg.posterior_var_floor;
+rbcm_beta_max = aggregation_cfg.rbcm_beta_max;
+bcm_prior_scale = aggregation_cfg.bcm_prior_scale;
 
 for m = 1:M
     x_m = InducingPoints_Coordinates(:, m);
@@ -19,9 +23,10 @@ for m = 1:M
         mu = max(-30, min(30, mu_n(d)));
         % 方差下限：1e-8对GP而言太小，容易在数据点重合时让1/vs爆炸
         % 提高到1e-3，符合物理上GP不确定性的合理下限
-        vs = max(var_n(d), 1e-3);
-        beta = 0.5 * (log(prior_var) - log(vs));
-        beta = max(min(beta, 10), eps);
+        vs = max(var_n(d), posterior_var_floor);
+        raw_beta = 0.5 * (log(prior_var) - log(vs));
+        beta_gpoe = max(min(raw_beta,aggregation_cfg.gpoe_beta_max),eps);
+        beta_rbcm = min(max(raw_beta, eps), rbcm_beta_max);
 
         switch method
             case 'poe'
@@ -29,8 +34,8 @@ for m = 1:M
                 P(2*d,   AgentNr, m) = AgentQuantity / vs;
 
             case 'gpoe'
-                P(2*d-1, AgentNr, m) = AgentQuantity * beta * mu / vs;
-                P(2*d,   AgentNr, m) = AgentQuantity * beta / vs;
+                P(2*d-1, AgentNr, m) = AgentQuantity * beta_gpoe * mu / vs;
+                P(2*d,   AgentNr, m) = AgentQuantity * beta_gpoe / vs;
 
             case 'moe'
                 P(2*d-1, AgentNr, m) = AgentQuantity * mu;
@@ -39,12 +44,12 @@ for m = 1:M
             case 'bcm'
                 P(2*d-1, AgentNr, m) = AgentQuantity * mu / vs;
                 P(2*d,   AgentNr, m) = AgentQuantity / vs - ...
-                    (AgentQuantity - 1) / prior_var;
+                    bcm_prior_scale * (AgentQuantity - 1) / prior_var;
 
             case 'rbcm'
-                P(2*d-1, AgentNr, m) = AgentQuantity * beta * mu / vs;
-                P(2*d,   AgentNr, m) = AgentQuantity * beta / vs + ...
-                    (1 - AgentQuantity * beta) / prior_var;
+                P(2*d-1, AgentNr, m) = AgentQuantity * beta_rbcm * mu / vs;
+                P(2*d,   AgentNr, m) = AgentQuantity * beta_rbcm / vs + ...
+                    (1 - AgentQuantity * beta_rbcm) / prior_var;
 
             otherwise
                 error('Unknown aggregation method: %s', method);

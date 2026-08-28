@@ -1,4 +1,4 @@
-function run_testpoint_dataset(DatasetName, CurrentMode, train_ratio, seed)
+function run_testpoint_dataset(DatasetName, CurrentMode, train_ratio, seed, NumInducingPoints)
 %RUN_TESTPOINT_DATASET Fast vectorized TP-DAC / TP-AC dataset evaluation.
 %
 % Important logic:
@@ -21,6 +21,7 @@ function run_testpoint_dataset(DatasetName, CurrentMode, train_ratio, seed)
 
 if nargin < 3, train_ratio = 0.4; end
 if nargin < 4, seed = 1; end
+if nargin < 5, NumInducingPoints = 2500; end  % default matches max M
 rng(seed);
 
 fprintf('\n[测试点] %s  seed=%d  tr=%.0f%%\n', DatasetName, seed, train_ratio*100);
@@ -113,7 +114,7 @@ prior_var = SigmaF^2;
 
 [num_train, input_dim] = size(X_train);
 output_dim = size(Y_train,2);
-num_eval = min(3000, size(X_test,1));
+num_eval = min(NumInducingPoints, size(X_test,1));  % match inducing point count M
 
 X_eval = X_test(1:num_eval,:);
 Y_eval = Y_test(1:num_eval,:);

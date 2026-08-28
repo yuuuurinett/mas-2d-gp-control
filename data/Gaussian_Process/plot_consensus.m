@@ -143,4 +143,44 @@ for i = 1:size(summary_table,1)
         row{9}, row{10}, row{11}, row{12}, row{13}, row{14});
 end
 fclose(fid);
+
+%% Final ET consensus convergence values
+FigureObj_FinalConsensus = figure('Color','w','Position',[80,80,1300,850], ...
+    'Name','Final ET consensus convergence values');
+
+for d_idx = 1:numel(datasets)
+    dname = datasets{d_idx};
+    ax = subplot(2,2,d_idx,'Parent',FigureObj_FinalConsensus);
+    hold(ax,'on');
+
+    final_dac = nan(1,numel(agg_labels));
+    final_ac  = nan(1,numel(agg_labels));
+    for a_idx = 1:numel(agg_labels)
+        row_idx = find(strcmp(summary_table(:,1), dname) & ...
+            strcmp(summary_table(:,2), agg_labels{a_idx}), 1);
+        if ~isempty(row_idx)
+            final_dac(a_idx) = summary_table{row_idx,7};
+            final_ac(a_idx)  = summary_table{row_idx,13};
+        end
+    end
+
+    bar(ax, [final_dac(:), final_ac(:)]);
+    set(ax, 'YScale', 'log');
+    xticks(ax, 1:numel(agg_labels));
+    xticklabels(ax, agg_labels);
+    ylabel(ax, 'Final consensus disagreement');
+    title(ax, dname);
+    grid(ax,'on');
+    legend(ax, {'IP-DAC','IP-AC'}, 'Location','best');
+end
+
+sgtitle(FigureObj_FinalConsensus, ...
+    sprintf('Final ET consensus convergence values (Train=%.0f%%, seeds=%d-%d)', ...
+    train_ratio*100, seed_list(1), seed_list(end)));
+
+final_fig_path = fullfile('Result','Dataset','consensus_final_values.fig');
+final_png_path = fullfile('Result','Dataset','consensus_final_values.png');
+savefig(FigureObj_FinalConsensus, final_fig_path);
+saveas(FigureObj_FinalConsensus, final_png_path);
+fprintf('Final convergence figure saved to %s and %s\n', final_fig_path, final_png_path);
 fprintf('CSV 已导出到 %s，可直接用 Excel 打开或粘贴进 Word 表格\n', csv_path);

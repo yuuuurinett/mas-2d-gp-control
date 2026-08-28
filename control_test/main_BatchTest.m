@@ -9,7 +9,7 @@ clc; close all;
 
 %% Configuration
 CurrentMode    = 'all';       % 'poe'|'gpoe'|'moe'|'bcm'|'rbcm' or 'all'
-TestType       = 'inducing';       % 'test'|'inducing'|'cen'|'nbr'|'all'
+TestType       = 'all';       % 'test'|'inducing'|'cen'|'nbr'|'all'
 use_formation  = true;        % true = formation, false = no formation
 
 % Set these false when you only want to reload existing .mat files and export tables.
@@ -47,18 +47,20 @@ else
 end
 
 %% 1. Run simulations
-%run_inducing = ismember(lower(TestType), {'inducing','all'});
-%run_test     = ismember(lower(TestType), {'test','all'});
-%run_cen      = ismember(lower(TestType), {'cen','all'});
-%run_nbr      = ismember(lower(TestType), {'nbr','all'});
+run_inducing = ismember(lower(TestType), {'inducing','all'});
+run_test     = ismember(lower(TestType), {'test','all'});
+run_cen      = ismember(lower(TestType), {'cen','all'});
+run_nbr      = ismember(lower(TestType), {'nbr','all'});
 
 
+%{
 if force_no_run
     run_inducing = false;
     run_test     = false;
     run_cen      = false;
     run_nbr      = false;
 end
+%}
 
 if run_inducing
     AllModes_ind = [Modes_dac, Modes_ac, Modes_baseline];
@@ -191,48 +193,26 @@ for m = 1:numel(Modes_dac)
 end
 fprintf('%s\n', repmat('=', 1, 104));
 
-%% 6. Print online-learning table
+%% 6. Print inducing-point consensus communication table
 fprintf('\n%s\n', repmat('=', 1, 118));
-fprintf('  Online learning ET: average triggers / agent  [%s]\n', form_tag);
-fprintf('  %-8s  %-10s  %-10s  %-10s  %-10s  %-10s  %-10s\n', ...
-    'Method','IP-DAC','IP-AC','TP-DAC','TP-AC','CEN','NBR');
+fprintf('  IP consensus broadcast triggers: average broadcasts / agent  [%s]\n', form_tag);
+fprintf('  %-8s  %-18s  %-18s\n', 'Method','IP-DAC','IP-AC');
 fprintf('  %s\n', repmat('-', 1, 114));
 
 for m = 1:numel(Modes_dac)
-    fprintf('  %-8s  %-10s  %-10s  %-10s  %-10s  %-10s  %-10s\n', ...
+    fprintf('  %-8s  %-18s  %-18s\n', ...
         upper(Modes_dac{m}), ...
-        fmt_num(Stats(m).IP_DAC.online_avg, '%.2f'), ...
-        fmt_num(Stats(m).IP_AC.online_avg,  '%.2f'), ...
-        fmt_num(Stats(m).TP_DAC.online_avg, '%.2f'), ...
-        fmt_num(Stats(m).TP_AC.online_avg,  '%.2f'), ...
-        fmt_num(Stats(m).CEN.online_avg,    '%.2f'), ...
-        fmt_num(Stats(m).NBR.online_avg,    '%.2f'));
+        fmt_num(Stats(m).IP_DAC.dac_comm_ag, '%.2f'), ...
+        fmt_num(Stats(m).IP_AC.ac_comm_ag,   '%.2f'));
 end
 fprintf('%s\n', repmat('=', 1, 118));
 
-%% 7. Print communication table
-fprintf('\n%s\n', repmat('=', 1, 118));
-fprintf('  Communication ET statistics  [%s]\n', form_tag);
-fprintf('  %-8s  %-14s  %-14s  %-14s  %-14s\n', ...
-    'Method','IP-DAC /pt','IP-AC /agent','TP-DAC /pt','TP-AC /agent');
-fprintf('  %s\n', repmat('-', 1, 114));
-
-for m = 1:numel(Modes_dac)
-    fprintf('  %-8s  %-14s  %-14s  %-14s  %-14s\n', ...
-        upper(Modes_dac{m}), ...
-        fmt_num(Stats(m).IP_DAC.dac_comm_pt, '%.4f'), ...
-        fmt_num(Stats(m).IP_AC.ac_comm_ag,   '%.2f'), ...
-        fmt_num(Stats(m).TP_DAC.dac_comm_pt, '%.4f'), ...
-        fmt_num(Stats(m).TP_AC.ac_comm_ag,   '%.2f'));
-end
-fprintf('%s\n', repmat('=', 1, 118));
-
-%% 8. Export Markdown tables
+%% 7. Export Markdown tables
 md_file = fullfile(SaveFolder_Tables, sprintf('online_learning_summary_%s.md', form_tag));
 export_markdown_summary(md_file, form_tag, Modes_dac, Err_IP_DAC, Err_IP_AC, Err_TP_DAC, Err_TP_AC, Err_CEN, Err_NBR, Err_Local, Err_Exact, Stats);
 fprintf('\nMarkdown summary exported to:\n%s\n', md_file);
 
-%% 9. Plot tracking curves
+%% 8. Plot tracking curves
 lw = 1.5;
 for m = 1:numel(Modes_dac)
     ac_name = [Modes_dac{m}, '_ac'];
@@ -277,6 +257,15 @@ for m = 1:numel(Modes_dac)
     fname_fig = sprintf('Comparison_%s_%s', upper(Modes_dac{m}), form_tag);
     saveas(fig, fullfile(SaveFolder_Figures, [fname_fig, '.png']));
     savefig(fig, fullfile(SaveFolder_Figures, [fname_fig, '.fig']));
+
+    dac_result_file = fullfile(SaveFolder_Inducing, ...
+        sprintf('%s_%s.mat', Modes_dac{m}, form_tag));
+    ac_result_file = fullfile(SaveFolder_Inducing, ...
+        sprintf('%s_%s.mat', ac_name, form_tag));
+    plot_agent_tracking_errors(dac_result_file, ac_result_file, ...
+        Modes_dac{m}, form_tag, SaveFolder_Figures);
+    plot_consensus_broadcasts(dac_result_file, ac_result_file, ...
+        Modes_dac{m}, form_tag, SaveFolder_Figures);
 end
 
 fprintf('\nDone. Figures saved to %s\n', SaveFolder_Figures);
@@ -298,7 +287,7 @@ end
 function st = load_gp_stats(fpath)
     st = struct();
     st.online_avg   = NaN;
-    st.dac_comm_pt  = NaN;
+    st.dac_comm_ag  = NaN;
     st.ac_comm_ag   = NaN;
 
     if ~exist(fpath, 'file')
@@ -307,27 +296,171 @@ function st = load_gp_stats(fpath)
 
     d = load(fpath);
 
-    % Online learning data-trigger statistics
+    % Fixed time-triggered online-learning updates.
     if isfield(d, 'online_trigger_count')
         st.online_avg = mean(d.online_trigger_count(:));
+    elseif isfield(d, 'online_update_count')
+        st.online_avg = mean(d.online_update_count(:));
     end
 
-    % DAC communication: average triggers / agent / point
-    if isfield(d, 'dac_trigger_count_per_agent_point')
-        st.dac_comm_pt = d.dac_trigger_count_per_agent_point;
+    % DAC communication: average agent-level broadcasts.
+    if isfield(d, 'dac_broadcasts_per_agent')
+        st.dac_comm_ag = d.dac_broadcasts_per_agent;
+    elseif isfield(d, 'dac_trigger_count_per_agent_point')
+        st.dac_comm_ag = d.dac_trigger_count_per_agent_point;
     elseif isfield(d, 'trigger_count_per_agent_point')
-        st.dac_comm_pt = d.trigger_count_per_agent_point;
+        st.dac_comm_ag = d.trigger_count_per_agent_point;
     elseif isfield(d, 'dac_total_trigger_count') && isfield(d, 'NumInducingPoints')
-        st.dac_comm_pt = mean(d.dac_total_trigger_count(:)) / d.NumInducingPoints;
+        st.dac_comm_ag = mean(d.dac_total_trigger_count(:)) / d.NumInducingPoints;
+    elseif isfield(d, 'dac_total_trigger_count') && isfield(d, 'InducingPoints_Coordinates')
+        point_count = size(d.InducingPoints_Coordinates,2);
+        st.dac_comm_ag = mean(d.dac_total_trigger_count(:)) / point_count;
     elseif isfield(d, 'total_trigger_count') && isfield(d, 'NumInducingPoints')
-        st.dac_comm_pt = mean(d.total_trigger_count(:)) / d.NumInducingPoints;
+        st.dac_comm_ag = mean(d.total_trigger_count(:)) / d.NumInducingPoints;
     end
 
-    % AC communication: average triggers / agent
-    if isfield(d, 'ac_trigger_count_per_agent')
+    % AC communication: average agent-level broadcasts.
+    if isfield(d, 'ac_broadcasts_per_agent')
+        st.ac_comm_ag = d.ac_broadcasts_per_agent;
+    elseif isfield(d, 'ac_trigger_count_per_agent_point')
+        st.ac_comm_ag = d.ac_trigger_count_per_agent_point;
+    elseif isfield(d, 'ac_trigger_count_per_agent')
         st.ac_comm_ag = d.ac_trigger_count_per_agent;
     elseif isfield(d, 'ac_total_trigger_count')
         st.ac_comm_ag = mean(d.ac_total_trigger_count(:));
+    end
+end
+
+function plot_agent_tracking_errors(dac_file, ac_file, method, form_tag, output_folder)
+    dac = load_agent_tracking_history(dac_file);
+    ac = load_agent_tracking_history(ac_file);
+    if isempty(dac.error) && isempty(ac.error)
+        return;
+    end
+
+    agent_count = max(size(dac.error,1), size(ac.error,1));
+    fig = figure('Name', sprintf('%s agent tracking errors', upper(method)), ...
+        'Color', 'w');
+    layout = tiledlayout(fig, 3, 2, 'TileSpacing', 'compact', ...
+        'Padding', 'compact');
+    for agent_i = 1:agent_count
+        ax = nexttile(layout);
+        hold(ax, 'on'); grid(ax, 'on'); box(ax, 'on');
+        set(ax, 'YScale', 'log', 'FontName', 'Times New Roman');
+        if agent_i <= size(dac.error,1)
+            plot(ax, dac.time, dac.error(agent_i,:), 'b-', ...
+                'LineWidth', 1.2, 'DisplayName', 'IP-DAC');
+        end
+        if agent_i <= size(ac.error,1)
+            plot(ax, ac.time, ac.error(agent_i,:), 'r--', ...
+                'LineWidth', 1.2, 'DisplayName', 'IP-AC');
+        end
+        title(ax, sprintf('Agent %d', agent_i));
+        xlabel(ax, 't (s)'); ylabel(ax, '$\|\vartheta_i(t)\|$', ...
+            'Interpreter', 'latex');
+        if agent_i == 1
+            legend(ax, 'Location', 'best');
+        end
+    end
+    title(layout, sprintf('Tracking error of each agent - %s [%s]', ...
+        upper(method), form_tag));
+    base_name = sprintf('AgentTracking_%s_%s', upper(method), form_tag);
+    saveas(fig, fullfile(output_folder, [base_name, '.png']));
+    savefig(fig, fullfile(output_folder, [base_name, '.fig']));
+end
+
+function history = load_agent_tracking_history(fpath)
+    history = struct('error', [], 'time', []);
+    if ~isfile(fpath)
+        return;
+    end
+    data = load(fpath, 'vartheta_all_set', 't_set');
+    if ~isfield(data, 'vartheta_all_set') || ~isfield(data, 't_set')
+        return;
+    end
+    state_dimension = 4;
+    agent_count = size(data.vartheta_all_set,1) / state_dimension;
+    if agent_count ~= floor(agent_count)
+        return;
+    end
+    reshaped_error = reshape(data.vartheta_all_set, ...
+        state_dimension, agent_count, []);
+    history.error = squeeze(vecnorm(reshaped_error,2,1));
+    history.time = data.t_set(1:size(history.error,2));
+end
+
+function plot_consensus_broadcasts(dac_file, ac_file, method, form_tag, output_folder)
+    dac = load_broadcast_history(dac_file, 'dac_broadcast_count_set');
+    ac = load_broadcast_history(ac_file, 'ac_broadcast_count_set');
+    if isempty(dac.counts) && isempty(ac.counts)
+        return;
+    end
+
+    fig = figure('Name', sprintf('%s consensus broadcasts', upper(method)), ...
+        'Color', 'w');
+    layout = tiledlayout(fig, 2, 1, 'TileSpacing', 'compact', ...
+        'Padding', 'compact');
+
+    ax1 = nexttile(layout);
+    hold(ax1, 'on'); grid(ax1, 'on'); box(ax1, 'on');
+    plot_broadcast_instances(ax1, dac, 0, [0 0.4470 0.7410], 'DAC');
+    agent_offset = 0;
+    if ~isempty(dac.counts)
+        agent_offset = size(dac.counts,1) + 1;
+    end
+    plot_broadcast_instances(ax1, ac, agent_offset, [0.8500 0.3250 0.0980], 'AC');
+    xlabel(ax1, 't (s)'); ylabel(ax1, 'Agent');
+    title(ax1, 'Broadcast trigger instances');
+
+    ax2 = nexttile(layout);
+    hold(ax2, 'on'); grid(ax2, 'on'); box(ax2, 'on');
+    if ~isempty(dac.counts)
+        plot(ax2, dac.time, mean(cumsum(dac.counts,2),1), 'b-', ...
+            'LineWidth', 1.5, 'DisplayName', 'IP-DAC');
+    end
+    if ~isempty(ac.counts)
+        plot(ax2, ac.time, mean(cumsum(ac.counts,2),1), 'r--', ...
+            'LineWidth', 1.5, 'DisplayName', 'IP-AC');
+    end
+    xlabel(ax2, 't (s)'); ylabel(ax2, 'Average cumulative broadcasts / agent');
+    title(ax2, 'Communication growth over simulation time');
+    legend(ax2, 'Location', 'northwest');
+
+    title(layout, sprintf('%s consensus communication [%s]', ...
+        upper(method), form_tag));
+    base_name = sprintf('ConsensusTriggers_%s_%s', upper(method), form_tag);
+    saveas(fig, fullfile(output_folder, [base_name, '.png']));
+    savefig(fig, fullfile(output_folder, [base_name, '.fig']));
+end
+
+function history = load_broadcast_history(fpath, field_name)
+    history = struct('counts', [], 'time', []);
+    if ~isfile(fpath)
+        return;
+    end
+    data = load(fpath, field_name, 't_set');
+    if ~isfield(data, field_name) || ~isfield(data, 't_set')
+        return;
+    end
+    history.counts = data.(field_name);
+    sample_count = size(history.counts,2);
+    history.time = data.t_set(1:sample_count);
+end
+
+function plot_broadcast_instances(ax, history, agent_offset, color, label_prefix)
+    if isempty(history.counts)
+        return;
+    end
+    agent_count = size(history.counts,1);
+    for agent_i = 1:agent_count
+        event_idx = find(history.counts(agent_i,:) > 0);
+        if isempty(event_idx)
+            continue;
+        end
+        event_sizes = 12 + 8*log1p(history.counts(agent_i,event_idx));
+        scatter(ax, history.time(event_idx), ...
+            (agent_offset+agent_i)*ones(size(event_idx)), event_sizes, ...
+            color, 'x', 'DisplayName', sprintf('%s agent %d', label_prefix, agent_i));
     end
 end
 
@@ -364,30 +497,14 @@ function export_markdown_summary(md_file, form_tag, Modes_dac, Err_IP_DAC, Err_I
             fmt_num(Err_Exact(end),    '%.4f'));
     end
 
-    fprintf(fid, '\n## Online learning data-trigger statistics\n\n');
-    fprintf(fid, '| Method | IP-DAC ET / agent | IP-AC ET / agent | TP-DAC ET / agent | TP-AC ET / agent | CEN ET / agent | NBR ET / agent |\n');
-    fprintf(fid, '|---|---:|---:|---:|---:|---:|---:|\n');
+    fprintf(fid, '\n## IP consensus communication triggers\n\n');
+    fprintf(fid, '| Method | IP-DAC broadcasts / agent | IP-AC broadcasts / agent |\n');
+    fprintf(fid, '|---|---:|---:|\n');
     for m = 1:numel(Modes_dac)
-        fprintf(fid, '| %s | %s | %s | %s | %s | %s | %s |\n', ...
+        fprintf(fid, '| %s | %s | %s |\n', ...
             upper(Modes_dac{m}), ...
-            fmt_num(Stats(m).IP_DAC.online_avg, '%.2f'), ...
-            fmt_num(Stats(m).IP_AC.online_avg,  '%.2f'), ...
-            fmt_num(Stats(m).TP_DAC.online_avg, '%.2f'), ...
-            fmt_num(Stats(m).TP_AC.online_avg,  '%.2f'), ...
-            fmt_num(Stats(m).CEN.online_avg,    '%.2f'), ...
-            fmt_num(Stats(m).NBR.online_avg,    '%.2f'));
-    end
-
-    fprintf(fid, '\n## Communication statistics\n\n');
-    fprintf(fid, '| Method | IP-DAC comm. / agent / point | IP-AC comm. / agent | TP-DAC comm. / agent / point | TP-AC comm. / agent |\n');
-    fprintf(fid, '|---|---:|---:|---:|---:|\n');
-    for m = 1:numel(Modes_dac)
-        fprintf(fid, '| %s | %s | %s | %s | %s |\n', ...
-            upper(Modes_dac{m}), ...
-            fmt_num(Stats(m).IP_DAC.dac_comm_pt, '%.4f'), ...
-            fmt_num(Stats(m).IP_AC.ac_comm_ag,   '%.2f'), ...
-            fmt_num(Stats(m).TP_DAC.dac_comm_pt, '%.4f'), ...
-            fmt_num(Stats(m).TP_AC.ac_comm_ag,   '%.2f'));
+            fmt_num(Stats(m).IP_DAC.dac_comm_ag, '%.2f'), ...
+            fmt_num(Stats(m).IP_AC.ac_comm_ag,   '%.2f'));
     end
 
     fprintf(fid, '\n## Notes\n\n');

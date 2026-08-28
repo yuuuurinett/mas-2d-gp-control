@@ -21,7 +21,7 @@
 % For normal metrics:
 %   IP-DAC/IP-AC read Low/Medium/High from M-ablation files.
 %
-% For Trigger_Ratio_Train(%):
+% For Trigger_Count_per_agent_per_inducing_point and Trigger_Ratio_Train(%):
 %   IP-DAC/IP-AC show only one final-MC row.
 %   Other methods show "-".
 %
@@ -69,7 +69,7 @@ MdPath   = fullfile(DatasetResultRoot, 'All_Methods_Summary_dataset_columns_with
 
 %% ===================== Write HTML =====================
 
-fid = fopen(HtmlPath, 'w');
+fid = fopen(HtmlPath, 'w', 'n', 'UTF-8');
 if fid < 0
     error('Cannot open HTML file:\n%s', HtmlPath);
 end
@@ -98,9 +98,10 @@ fprintf(fid, '</head>\n<body>\n');
 
 fprintf(fid, '<h1>Dataset Results Summary</h1>\n');
 fprintf(fid, '<p><b>Train ratio:</b> %.0f%% &nbsp;&nbsp; <b>MC:</b> %d</p>\n', train_ratio * 100, n_mc);
-fprintf(fid, '<p>For IP-DAC/IP-AC, Low/Medium/High rows are shown for accuracy/time metrics.</p>\n');
+fprintf(fid, '<p>For IP-DAC/IP-AC, Low/Medium/High rows are shown for accuracy/time metrics. IP-AC uses AC-specific M-ablation files when available; otherwise it falls back to the DAC M-ablation files.</p>\n');
 fprintf(fid, '<p>KIN40K/POL/SARCOS: Low=500, Medium=1500, High=2500. PUMADYN32NM: Low=100, Medium=300, High=500.</p>\n');
-fprintf(fid, '<p>For Trigger_Ratio_Train(%%), IP-DAC/IP-AC show one final-MC value only.</p>\n');
+fprintf(fid, '<p>Trigger_Count_per_agent_per_inducing_point is reported as mean±std over MC seeds. Trigger_Ratio_Train(%%) = Trigger_Count_per_agent_per_inducing_point / 500 × 100%%.</p>\n');
+fprintf(fid, '<p>CEN is a centralized computational baseline: local prediction and aggregation time are counted, while explicit network transmission cost is not modeled.</p>\n');
 
 for met = 1:numel(metrics_names)
     metric_name = metrics_names{met};
@@ -169,7 +170,7 @@ for met = 1:numel(metrics_names)
 
                         agg_lower = agg_to_file(agg);
                         vals = read_ip_m_ablation_values( ...
-                            DatasetResultRoot, dname, agg_lower, M_val, tr_tag, n_mc, met);
+                            DatasetResultRoot, dname, agg_lower, method_prefix, M_val, tr_tag, n_mc, met);
 
                         mv = mean(vals, 'omitnan');
                         sv = std(vals, 0, 'omitnan');
@@ -223,6 +224,8 @@ for met = 1:numel(metrics_names)
     fprintf(fid, '</div>\n');
 end
 
+write_consensus_final_html(fid, DatasetResultRoot, train_ratio);
+
 fprintf(fid, '</body>\n</html>\n');
 fclose(fid);
 
@@ -230,7 +233,7 @@ fprintf('HTML saved:\n%s\n', HtmlPath);
 
 %% ===================== Write Markdown =====================
 
-fid = fopen(MdPath, 'w');
+fid = fopen(MdPath, 'w', 'n', 'UTF-8');
 if fid < 0
     error('Cannot open Markdown file:\n%s', MdPath);
 end
@@ -240,6 +243,9 @@ fprintf(fid, '**Train ratio:** %.0f%%  \n', train_ratio * 100);
 fprintf(fid, '**MC:** %d  \n\n', n_mc);
 fprintf(fid, 'KIN40K/POL/SARCOS: Low=500, Medium=1500, High=2500.  \n');
 fprintf(fid, 'PUMADYN32NM: Low=100, Medium=300, High=500.  \n\n');
+fprintf(fid, 'For IP-AC Low/Medium/High, AC-specific M-ablation files are used when available; otherwise the table falls back to DAC M-ablation files.  \n');
+fprintf(fid, 'Trigger Count is mean±std over MC seeds. Trigger Ratio = Trigger Count per agent per inducing point / 500 × 100%%.  \n');
+fprintf(fid, 'CEN is a centralized computational baseline: local prediction and aggregation time are counted, while explicit network transmission cost is not modeled.  \n\n');
 
 for met = 1:numel(metrics_names)
     metric_name = metrics_names{met};
@@ -291,7 +297,7 @@ for met = 1:numel(metrics_names)
 
                         agg_lower = agg_to_file(agg);
                         vals = read_ip_m_ablation_values( ...
-                            DatasetResultRoot, dname, agg_lower, M_val, tr_tag, n_mc, met);
+                            DatasetResultRoot, dname, agg_lower, method_prefix, M_val, tr_tag, n_mc, met);
 
                         mv = mean(vals, 'omitnan');
                         sv = std(vals, 0, 'omitnan');
@@ -332,6 +338,8 @@ for met = 1:numel(metrics_names)
     end
 end
 
+write_consensus_final_markdown(fid, DatasetResultRoot, train_ratio);
+
 fclose(fid);
 
 fprintf('Markdown saved:\n%s\n', MdPath);
@@ -340,14 +348,13 @@ fprintf('Markdown saved:\n%s\n', MdPath);
 %% Helper functions
 %% ========================================================================
 
-function vals = read_ip_m_ablation_values(DatasetResultRoot, dname, agg_lower, M_val, tr_tag, n_mc, met)
+function vals = read_ip_m_ablation_values(DatasetResultRoot, dname, agg_lower, method_prefix, M_val, tr_tag, n_mc, met)
     vals = NaN(1, n_mc);
 
     for mc = 1:n_mc
-        fname = sprintf('%s_M%d_tr%d_mc%d.mat', agg_lower, M_val, tr_tag, mc);
-        fpath = fullfile(DatasetResultRoot, dname, fname);
+        fpath = find_ip_m_ablation_file(DatasetResultRoot, dname, agg_lower, method_prefix, M_val, tr_tag, mc);
 
-        if ~isfile(fpath)
+        if isempty(fpath) || ~isfile(fpath)
             continue;
         end
 
@@ -400,7 +407,9 @@ function value_text = format_table_value(mv, sv, met)
     end
 
     if met == 7
-        value_text = sprintf('%.1f±%.1f%%', mv, sv);
+        % Use char(177) to avoid platform encoding issues with the ± sign.
+        value_text = sprintf(['%.1f' char(177) '%.1f%%'], mv, sv);
+        return;
 
     elseif met == 6
         if mv == 0
@@ -410,13 +419,88 @@ function value_text = format_table_value(mv, sv, met)
         end
 
     elseif met == 5
-        value_text = sprintf('%.0f', mv);
+        value_text = sprintf(['%.1f' char(177) '%.1f'], mv, sv);
+
+    elseif met == 1 || met == 2
+        value_text = sprintf(['%.4f' char(177) '%.4f'], mv, sv);
 
     elseif met == 3 || met == 4
-        value_text = sprintf('%.3f±%.3f', mv, sv);
+        value_text = sprintf(['%.3f' char(177) '%.3f'], mv, sv);
+        return;
 
     else
-        value_text = sprintf('%.4f±%.4f', mv, sv);
+        value_text = sprintf(['%.4f' char(177) '%.4f'], mv, sv);
+    end
+end
+
+function write_consensus_final_html(fid, DatasetResultRoot, train_ratio)
+    ConsensusPath = fullfile(DatasetResultRoot, 'consensus_summary_allseeds.mat');
+
+    fprintf(fid, '<div class="metric-block">\n');
+    fprintf(fid, '<h2>Final_ET_consensus_convergence_values__(Train=%.0f%%)</h2>\n', train_ratio * 100);
+
+    if ~isfile(ConsensusPath)
+        fprintf(fid, '<p class="missing">No consensus_summary_allseeds.mat found. Run plot_consensus.m to generate final convergence values.</p>\n');
+        fprintf(fid, '</div>\n');
+        return;
+    end
+
+    S = load(ConsensusPath, 'summary_table', 'seed_list');
+    pm = char(177);
+
+    if isfield(S, 'seed_list') && ~isempty(S.seed_list)
+        fprintf(fid, '<p>Averaged over seeds %d-%d. Values are final consensus disagreement, mean%sstd.</p>\n', ...
+            S.seed_list(1), S.seed_list(end), pm);
+    else
+        fprintf(fid, '<p>Values are final consensus disagreement, mean%sstd.</p>\n', pm);
+    end
+
+    fprintf(fid, '<table>\n');
+    fprintf(fid, '<tr><th>Dataset</th><th>Aggregation</th><th>DAC final</th><th>AC final</th><th>DAC iter</th><th>AC iter</th><th>DAC trigger</th><th>AC trigger</th></tr>\n');
+
+    for i = 1:size(S.summary_table, 1)
+        row = S.summary_table(i,:);
+        fprintf(fid, '<tr><td>%s</td><td>%s</td><td>%.3e%s%.1e</td><td>%.3e%s%.1e</td><td>%.1f%s%.1f</td><td>%.1f%s%.1f</td><td>%.1f%s%.1f</td><td>%.1f%s%.1f</td></tr>\n', ...
+            escape_html(short_dataset_name(row{1})), escape_html(row{2}), ...
+            row{7}, pm, row{8}, row{13}, pm, row{14}, ...
+            row{3}, pm, row{4}, row{9}, pm, row{10}, ...
+            row{5}, pm, row{6}, row{11}, pm, row{12});
+    end
+
+    fprintf(fid, '</table>\n');
+    fprintf(fid, '</div>\n');
+end
+
+function write_consensus_final_markdown(fid, DatasetResultRoot, train_ratio)
+    ConsensusPath = fullfile(DatasetResultRoot, 'consensus_summary_allseeds.mat');
+    pm = char(177);
+
+    fprintf(fid, '\n\n# Final_ET_consensus_convergence_values__(Train=%.0f%%)\n\n', train_ratio * 100);
+
+    if ~isfile(ConsensusPath)
+        fprintf(fid, 'No `consensus_summary_allseeds.mat` found. Run `plot_consensus.m` to generate final convergence values.\n');
+        return;
+    end
+
+    S = load(ConsensusPath, 'summary_table', 'seed_list');
+
+    if isfield(S, 'seed_list') && ~isempty(S.seed_list)
+        fprintf(fid, 'Averaged over seeds %d-%d. Values are final consensus disagreement, mean%sstd.  \n\n', ...
+            S.seed_list(1), S.seed_list(end), pm);
+    else
+        fprintf(fid, 'Values are final consensus disagreement, mean%sstd.  \n\n', pm);
+    end
+
+    fprintf(fid, '| Dataset | Aggregation | DAC final | AC final | DAC iter | AC iter | DAC trigger | AC trigger |\n');
+    fprintf(fid, '|---|---|---:|---:|---:|---:|---:|---:|\n');
+
+    for i = 1:size(S.summary_table, 1)
+        row = S.summary_table(i,:);
+        fprintf(fid, '| %s | %s | %.3e%s%.1e | %.3e%s%.1e | %.1f%s%.1f | %.1f%s%.1f | %.1f%s%.1f | %.1f%s%.1f |\n', ...
+            short_dataset_name(row{1}), row{2}, ...
+            row{7}, pm, row{8}, row{13}, pm, row{14}, ...
+            row{3}, pm, row{4}, row{9}, pm, row{10}, ...
+            row{5}, pm, row{6}, row{11}, pm, row{12});
     end
 end
 
@@ -432,4 +516,24 @@ function s = escape_html(s)
     s = strrep(s, '<', '&lt;');
     s = strrep(s, '>', '&gt;');
     s = strrep(s, '"', '&quot;');
+end
+
+function fpath = find_ip_m_ablation_file(DatasetResultRoot, dname, agg_lower, method_prefix, M_val, tr_tag, mc)
+    % Prefer AC-specific M-ablation files for IP-AC rows, when they exist.
+    % Fall back to DAC files so the existing DAC M-ablation remains usable.
+    if strcmpi(method_prefix, 'IP-AC')
+        file_prefixes = {sprintf('%s_ac', agg_lower), agg_lower};
+    else
+        file_prefixes = {agg_lower};
+    end
+
+    fpath = '';
+    for k = 1:numel(file_prefixes)
+        fname = sprintf('%s_M%d_tr%d_mc%d.mat', file_prefixes{k}, M_val, tr_tag, mc);
+        candidate = fullfile(DatasetResultRoot, dname, fname);
+        if isfile(candidate)
+            fpath = candidate;
+            return;
+        end
+    end
 end

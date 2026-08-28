@@ -66,10 +66,10 @@ train_ratio = 0.4;
 n_mc        = 10;
 
 % If all are false, this script only reads existing result files and prints/writes summary.
-run_log = true;
+run_log = false;
 run_ip  = false;
-run_tp  = false;
-run_cen = true;
+run_tp  = true;
+run_cen = false;
 run_nbr = false;
 
 tr_tag = round(train_ratio * 100);
@@ -181,7 +181,17 @@ for d = 1:numel(datasets)
         if run_tp
             try
                 ensure_dataset_folder(DatasetResultRoot, dname);
-                run_testpoint_dataset(dname, 'all', train_ratio, seed);
+                % num_eval matches NumInducingPoints used in IP-DAC/IP-AC
+                % (hardcoded values from run_inducingpoint_dataset.m lines 114-121)
+                switch upper(dname)
+                    case 'KIN40K',      tp_M = 2100;
+                    case 'POL',         tp_M = 2000;
+                    case 'PUMADYN32NM', tp_M = 200;
+                    case 'SARCOS',      tp_M = 1500;
+                    otherwise,          tp_M = 2500;
+                end
+                fprintf('[TP] Dataset=%s, tp_M=%d\n', dname, tp_M);
+                run_testpoint_dataset(dname, 'all', train_ratio, seed, tp_M);
             catch ME
                 fprintf('\n[ERROR] TP methods failed: dataset=%s, seed=%d\n', dname, seed);
                 fprintf('%s\n', getReport(ME, 'extended', 'hyperlinks', 'off'));
@@ -214,18 +224,13 @@ for d = 1:numel(datasets)
     fprintf('\nCollecting results for dataset: %s\n', dname);
 
     for mi = 1:num_methods
-        sm       = NaN(1,n_mc);
-        rm       = NaN(1,n_mc);
-        t_tr     = NaN(1,n_mc);
-        t_te     = NaN(1,n_mc);
-        c_tr     = NaN(1,n_mc);  % Trigger_Times:    only IP-DAC/IP-AC
-        c_te     = NaN(1,n_mc);  % Consensus_Iter:   only TP-DAC/TP-AC
-        tr_ratio = NaN(1,n_mc);  % Trigger_Ratio(%): only IP-DAC/IP-AC
-
-        is_ip = startsWith(methods_names{mi}, 'IP-DAC') || ...
-                startsWith(methods_names{mi}, 'IP-AC');
-        is_tp = startsWith(methods_names{mi}, 'TP-DAC') || ...
-                startsWith(methods_names{mi}, 'TP-AC');
+        sm   = NaN(1,n_mc);
+        rm   = NaN(1,n_mc);
+        t_tr = NaN(1,n_mc);
+        t_te = NaN(1,n_mc);
+        c_tr = NaN(1,n_mc);
+        c_te = NaN(1,n_mc);
+        it   = NaN(1,n_mc);
 
         for mc = 1:n_mc
             if contains(methods_files{mi}, 'tr%d')
@@ -242,29 +247,31 @@ for d = 1:numel(datasets)
 
                     if isfield(res,'smse'), sm(mc) = res.smse; end
                     if isfield(res,'rmse'), rm(mc) = res.rmse; end
-                    if isfield(res,'t_train_per_point'), t_tr(mc) = res.t_train_per_point; end
-                    if isfield(res,'t_test_per_point'),  t_te(mc) = res.t_test_per_point;  end
 
-                    % Trigger_Times: only meaningful for IP-DAC/IP-AC
-                    if is_ip && isfield(res,'comm_train')
+                    if isfield(res,'t_train_per_point')
+                        t_tr(mc) = res.t_train_per_point;
+                    end
+
+                    if isfield(res,'t_test_per_point')
+                        t_te(mc) = res.t_test_per_point;
+                    end
+
+                    if isfield(res,'comm_train')
                         c_tr(mc) = res.comm_train;
+                    else
+                        c_tr(mc) = 0;
                     end
 
-                    % Consensus_Iter: only meaningful for TP-DAC/TP-AC
-                    if is_tp && isfield(res,'comm_test')
+                    if isfield(res,'comm_test')
                         c_te(mc) = res.comm_test;
-                    elseif is_tp && isfield(res,'iter_converge')
-                        c_te(mc) = res.iter_converge;
+                    else
+                        c_te(mc) = 0;
                     end
 
-                    % Trigger_Ratio: only meaningful for IP-DAC/IP-AC
-                    if is_ip
-                        if isfield(res,'trigger_ratio_train')
-                            tmp = res.trigger_ratio_train;
-                            tr_ratio(mc) = tmp * 100;  % stored as fraction, convert to %
-                        elseif ~isnan(c_tr(mc)) && isfield(res,'iter_converge') && res.iter_converge > 0
-                            tr_ratio(mc) = c_tr(mc) / res.iter_converge * 100;
-                        end
+                    if isfield(res,'iter_converge')
+                        it(mc) = res.iter_converge;
+                    else
+                        it(mc) = NaN;
                     end
 
                 catch ME
@@ -276,20 +283,26 @@ for d = 1:numel(datasets)
             end
         end
 
-        mean_results(d,mi,1) = mean(sm,       'omitnan');
-        std_results(d,mi,1)  = std(sm,        'omitnan');
-        mean_results(d,mi,2) = mean(rm,       'omitnan');
-        std_results(d,mi,2)  = std(rm,        'omitnan');
-        mean_results(d,mi,3) = mean(t_tr,     'omitnan');
-        std_results(d,mi,3)  = std(t_tr,      'omitnan');
-        mean_results(d,mi,4) = mean(t_te,     'omitnan');
-        std_results(d,mi,4)  = std(t_te,      'omitnan');
-        mean_results(d,mi,5) = mean(c_tr,     'omitnan');   % Trigger_Times
+        mean_results(d,mi,1) = mean(sm,   'omitnan');
+        std_results(d,mi,1)  = std(sm,    'omitnan');
+
+        mean_results(d,mi,2) = mean(rm,   'omitnan');
+        std_results(d,mi,2)  = std(rm,    'omitnan');
+
+        mean_results(d,mi,3) = mean(t_tr, 'omitnan');
+        std_results(d,mi,3)  = std(t_tr,  'omitnan');
+
+        mean_results(d,mi,4) = mean(t_te, 'omitnan');
+        std_results(d,mi,4)  = std(t_te,  'omitnan');
+
+        mean_results(d,mi,5) = mean(c_tr, 'omitnan');
         std_results(d,mi,5)  = 0;
-        mean_results(d,mi,6) = mean(c_te,     'omitnan');   % Consensus_Iter
+
+        mean_results(d,mi,6) = mean(c_te, 'omitnan');
         std_results(d,mi,6)  = 0;
-        mean_results(d,mi,7) = mean(tr_ratio, 'omitnan');   % Trigger_Ratio(%)
-        std_results(d,mi,7)  = std(tr_ratio,  'omitnan');
+
+        mean_results(d,mi,7) = mean(it,   'omitnan');
+        std_results(d,mi,7)  = 0;
     end
 end
 
@@ -300,9 +313,9 @@ metrics_names = {
     'RMSE', ...
     'Train_T(ms/pt)', ...
     'Test_T(ms/pt)', ...
-    'Trigger_Times', ...      % ET触发次数, 仅IP-DAC/IP-AC有意义
-    'Consensus_Iter', ...     % 共识收敛步数, 仅TP-DAC/TP-AC有意义
-    'Trigger_Ratio_Train(%)' % comm_train/iter_converge*100, 仅IP-DAC/IP-AC
+    'Comm_Train', ...
+    'Comm_Test', ...
+    'Iter_Converge'
 };
 
 agg_list     = {'MOE','GPOE','POE','BCM','RBCM'};
@@ -333,24 +346,13 @@ for met = 1:num_metrics
                 target_name = sprintf('%s-%s', prefix, agg);
                 mi = find(strcmp(methods_names, target_name), 1);
 
-                is_ip = strcmp(prefix,'IP-DAC') || strcmp(prefix,'IP-AC');
-                is_tp = strcmp(prefix,'TP-DAC') || strcmp(prefix,'TP-AC');
-
                 if isempty(mi)
                     fprintf('  %14s', '-');
                 else
                     mv = mean_results(d,mi,met);
                     sv = std_results(d,mi,met);
 
-                    % Trigger_Times(5) and Trigger_Ratio(7): only IP
-                    % Consensus_Iter(6): only TP
-                    if (met == 5 || met == 7) && ~is_ip
-                        value_text = '-';
-                    elseif met == 6 && ~is_tp
-                        value_text = '-';
-                    else
-                        value_text = format_result_value(mv, sv, met);
-                    end
+                    value_text = format_result_value(mv, sv, met);
                     fprintf('  %14s', value_text);
                 end
             end
@@ -409,24 +411,17 @@ function value_text = format_result_value(mv, sv, met)
         return;
     end
 
-    if met == 7
-        % Trigger_Ratio_Train: percentage ± std, only IP-DAC/IP-AC
-        value_text = sprintf('%.1f±%.1f%%', mv, sv);
-    elseif met == 6
-        % Consensus_Iter: integer, only TP-DAC/TP-AC; 0→'-'
-        if mv == 0
+    if met >= 5
+        % Communication and iteration columns: integer display.
+        % 0 is shown as '-'.
+        if mv == 0 || isnan(mv)
             value_text = '-';
         else
             value_text = sprintf('%.0f', mv);
         end
-    elseif met == 5
-        % Trigger_Times: one decimal place, only IP-DAC/IP-AC
-        value_text = sprintf('%.1f', mv);
     elseif met == 3 || met == 4
-        % Train/Test time: 4 decimal places
-        value_text = sprintf('%.4f±%.4f', mv, sv);
+        value_text = sprintf('%.2f±%.2f', mv, sv);
     else
-        % SMSE, RMSE: 4 decimal places
         value_text = sprintf('%.4f±%.4f', mv, sv);
     end
 end

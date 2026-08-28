@@ -103,6 +103,7 @@ for n = 1:AgentQuantity
     LocalGP_set{n}.tau=1e-8; LocalGP_set{n}.delta=0.01;
 end
 t_train = toc(t_start);
+t_nbr_local_gp_train = t_train;
 fprintf('局部GP训练完成(已确保100%%数据覆盖): %.4fs\n', t_train);
 
 %% 5. 预计算所有 Agent 的局部预测 (调用外部批量加速函数版)
@@ -147,7 +148,8 @@ comm_test  = 1; % 邻居通信仅需 1 轮
 for mi=1:numel(method_list)
     cur=method_list{mi};
     fprintf('\n[%d/%d] NBR-%s\n',mi,numel(method_list),upper(cur));
-    tic;
+    t_nbr_test_local_prediction = Precompute_Time / max(numel(method_list), 1);
+    tic_aggregation = tic;
     
     agent_smse = zeros(AgentQuantity, 1);
     agent_rmse = zeros(AgentQuantity, 1);
@@ -205,10 +207,13 @@ for mi=1:numel(method_list)
         all_agents_err_sq(:, n) = mean(err.^2, 2);
     end
     
-    t_test = Precompute_Time/numel(method_list) + toc;
+    t_nbr_aggregation = toc(tic_aggregation);
+    t_test = t_nbr_test_local_prediction + t_nbr_aggregation;
     
     t_train_per_point = (t_train / N_train) * 1000;
     t_test_per_point  = (t_test / N_eval) * 1000;
+    t_train_total = t_train;
+    t_test_total = t_test;
 
     smse = mean(agent_smse);
     rmse = mean(agent_rmse);
@@ -220,11 +225,16 @@ for mi=1:numel(method_list)
 
     fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train: %.2f ms/pt  Test: %.2f ms/pt\n', ...
         smse, rmse, nlpd, t_train_per_point, t_test_per_point);
+    fprintf('  Timing NBR: LocalPred=%.3fs  Aggregation=%.3fs  TotalTest=%.3fs\n', ...
+        t_nbr_test_local_prediction, t_nbr_aggregation, t_test_total);
 
     
     save(fullfile(SaveFolder, sprintf('%s_nbr_tr%d_mc%d.mat', cur, tr_tag, seed)), ...
         'smse', 'rmse', 'nlpd', 't_train', 't_test', ...
+        't_train_total', 't_test_total', ...
         't_train_per_point', 't_test_per_point', ...
+        't_nbr_local_gp_train', 't_nbr_test_local_prediction', ...
+        't_nbr_aggregation', ...
         'comm_train', 'comm_test', ...
         'cur', 'seed', 'train_ratio', 'smse_curve', 'rmse_curve');
 end

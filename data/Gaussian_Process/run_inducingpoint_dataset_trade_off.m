@@ -206,9 +206,7 @@ end
 t_ip_inducing_prediction = toc(tic_inducing_prediction);
 fprintf('预计算完成: %.2fs\n', t_ip_inducing_prediction);
 
-% 用脚本自身所在路径作为项目根目录的锚点，避免因 MATLAB 当前工作目录
-% (pwd) 被意外切换（例如从子文件夹打开/运行脚本）导致 Result 文件夹
-% 定位错误、save 报 "does not exist"。
+
 ProjectRoot = fileparts(mfilename('fullpath'));
 SaveFolder = fullfile(ProjectRoot, 'Result','Dataset',DatasetName);
 if ~exist(SaveFolder,'dir'), mkdir(SaveFolder); end
@@ -219,6 +217,7 @@ for mi = 1:numel(AllModes)
     cur = AllModes{mi};
     fprintf('\n[%d/%d] %s\n', mi, numel(AllModes), cur);
     trigger_count_per_agent = zeros(AgentQuantity,NumInducingPoints);
+    broadcast_count_per_agent = zeros(AgentQuantity,1);
 
     base_method = strrep(lower(cur),'_ac','');
     if strcmpi(base_method,'gpoe')
@@ -235,6 +234,7 @@ for mi = 1:numel(AllModes)
 
     iter = 0;
     max_iter = 3000;
+    ConsensusBaselineIter = 500;
 
     % Convergence diagnostics
     conv_r = 1;
@@ -300,6 +300,7 @@ for mi = 1:numel(AllModes)
                     Xi_last_trigger(:,agent_i,trigger_idx) = Xi_now(:,agent_i,trigger_idx);
                     trigger_count_per_agent(agent_i,trigger_idx) = ...
                         trigger_count_per_agent(agent_i,trigger_idx) + 1;
+                    broadcast_count_per_agent(agent_i) = broadcast_count_per_agent(agent_i) + 1;
                 end
             end
 
@@ -318,11 +319,15 @@ for mi = 1:numel(AllModes)
         conv_curve_dac = conv_curve_dac(1:iter_converge);
 
         trigger_per_agent_point = mean(trigger_count_per_agent, 2);
-        comm_train = mean(trigger_count_per_agent(:));
+        point_trigger_count_mean = mean(trigger_count_per_agent(:));
+        broadcast_count_mean = mean(broadcast_count_per_agent);
+        comm_train = point_trigger_count_mean;
         comm_test  = 0;
-        trigger_ratio_train = comm_train / 500;
+        trigger_ratio_train = comm_train / ConsensusBaselineIter;
         fprintf('  [IP-DAC] 收敛步数:%d  平均触发次数/agent/point:%.1f\n', ...
             iter_converge, comm_train);
+        fprintf('  [IP-DAC broadcast stats] broadcast/agent:%.1f  point-trigger/agent/point:%.1f\n', ...
+            broadcast_count_mean, point_trigger_count_mean);
 
         Xi_final = Pi - Zeta;
 
@@ -376,6 +381,7 @@ for mi = 1:numel(AllModes)
                     Xi_last_trigger(:,agent_i,trigger_idx) = Xi(:,agent_i,trigger_idx);
                     trigger_count_per_agent(agent_i,trigger_idx) = ...
                         trigger_count_per_agent(agent_i,trigger_idx) + 1;
+                    broadcast_count_per_agent(agent_i) = broadcast_count_per_agent(agent_i) + 1;
                 end
             end
 
@@ -395,11 +401,15 @@ for mi = 1:numel(AllModes)
         conv_curve_dac = [];
 
         trigger_per_agent_point = mean(trigger_count_per_agent, 2);
-        comm_train = mean(trigger_count_per_agent(:));
+        point_trigger_count_mean = mean(trigger_count_per_agent(:));
+        broadcast_count_mean = mean(broadcast_count_per_agent);
+        comm_train = point_trigger_count_mean;
         comm_test  = 0;
-        trigger_ratio_train = comm_train / 500;
+        trigger_ratio_train = comm_train / ConsensusBaselineIter;
         fprintf('  [IP-AC] 收敛步数:%d  平均更新次数/agent/point:%.1f\n', ...
             iter_converge, comm_train);
+        fprintf('  [IP-AC broadcast stats] broadcast/agent:%.1f  point-trigger/agent/point:%.1f\n', ...
+            broadcast_count_mean, point_trigger_count_mean);
 
         Xi_final = Xi;
     end
@@ -532,10 +542,11 @@ for mi = 1:numel(AllModes)
         'compute_variance', ...
         't_ip_test_kernel', 't_ip_test_mean', 't_ip_test_variance', ...
         'comm_train', 'comm_test', 'iter_converge', ...
-        'event_count_mean', 'trigger_ratio_train', ...
+        'event_count_mean', 'trigger_ratio_train', 'ConsensusBaselineIter', ...
         'current_method', 'seed', 'train_ratio', 'NumInducingPoints', 'N_train', 'N_eval', ...
         'smse_curve', 'rmse_curve', ...
         'trigger_count_per_agent', 'trigger_per_agent_point', ...
+        'point_trigger_count_mean', 'broadcast_count_per_agent', 'broadcast_count_mean', ...
         'conv_curve_dac', 'conv_curve_ac', ...
         'conv_dac_tracking_curve', 'conv_dac_disagreement_curve', ...
         'conv_ac_avg_error_curve', 'conv_ac_disagreement_curve', ...

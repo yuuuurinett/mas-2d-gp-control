@@ -1,4 +1,4 @@
-%% run_M_ablation_mixed_MC10.m
+%% run_M_ablation_mixed_MC10_extra.m
 % Mixed M-ablation with 10 Monte Carlo runs.
 %
 % Non-PUMA datasets:
@@ -19,7 +19,17 @@ addpath(genpath(ProjectRoot));
 %% ===================== Configuration =====================
 
 Dataset_list = {'KIN40K','POL','PUMADYN32NM','SARCOS'};
-Method_list  = {'poe','gpoe','moe','bcm','rbcm'};
+
+% DAC M-ablation files are named, for example:
+%   poe_M500_tr40_mc1.mat
+% AC M-ablation files are named, for example:
+%   poe_ac_M500_tr40_mc1.mat
+% Existing files are skipped, so enabling AC below only fills missing AC
+% results and does not rerun the verified DAC M-ablation files.
+Method_list_dac = {'poe','gpoe','moe','bcm','rbcm'};
+Method_list_ac  = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};
+Method_list = [Method_list_dac, Method_list_ac];
+RunACMAbalation = any(contains(Method_list, '_ac'));
 
 train_ratio = 0.4;
 tr_tag = round(train_ratio * 100);
@@ -55,6 +65,7 @@ fprintf('Seeds = %d:%d\n', seeds(1), seeds(end));
 fprintf('AgentQuantity = %d\n', AgentQuantity);
 fprintf('Default M grid = 100:100:2500\n');
 fprintf('PUMA M grid    = 100:20:500\n');
+fprintf('Run AC M-ablation = %d\n', RunACMAbalation);
 fprintf('============================================================\n');
 
 fprintf('\nAgent/data allocation explanation:\n');

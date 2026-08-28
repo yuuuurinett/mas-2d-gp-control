@@ -88,6 +88,7 @@ for n=1:AgentQuantity
     LocalGP_set{n}.tau=1e-8; LocalGP_set{n}.delta=0.01;
 end
 t_train=toc(t_start);
+t_cen_local_gp_train = t_train;
 fprintf('局部GP训练完成（无通信）: %.4fs\n',t_train);
 
 %% 5. 方法列表
@@ -135,7 +136,8 @@ comm_test  = 1;
 for mi=1:numel(method_list)
     cur=method_list{mi};
     fprintf('\n[%d/%d] CEN-%s\n',mi,numel(method_list),upper(cur));
-    tic;
+    t_cen_test_local_prediction = Precompute_Time / max(numel(method_list), 1);
+    tic_aggregation = tic;
 
     Final_Mean=zeros(N_eval,y_dim);
     Final_Var =zeros(N_eval,y_dim);
@@ -178,7 +180,8 @@ for mi=1:numel(method_list)
         end
     end
 
-    t_test = Precompute_Time + toc;
+    t_cen_aggregation = toc(tic_aggregation);
+    t_test = t_cen_test_local_prediction + t_cen_aggregation;
 
     %% 8. 反归一化 & 误差计算
     mu_pred  = Final_Mean .* repmat(Y_std, N_eval, 1) + repmat(Y_mean, N_eval, 1);
@@ -191,9 +194,13 @@ for mi=1:numel(method_list)
 
     t_train_per_point = (t_train / N_train) * 1000;
     t_test_per_point  = (t_test / N_eval) * 1000;
+    t_train_total = t_train;
+    t_test_total = t_test;
 
     fprintf('  SMSE=%.4f  RMSE=%.4f  NLPD=%.4f  Train: %.2f ms/pt  Test: %.2f ms/pt\n', ...
         smse, rmse, nlpd, t_train_per_point, t_test_per_point);
+    fprintf('  Timing CEN: LocalPred=%.3fs  Aggregation=%.3fs  TotalTest=%.3fs\n', ...
+        t_cen_test_local_prediction, t_cen_aggregation, t_test_total);
 
     err_sq_mean = mean(err.^2, 2);
     smse_curve  = cumsum(err_sq_mean) ./ (1:N_eval)' / mean(Y_var_base);
@@ -201,7 +208,10 @@ for mi=1:numel(method_list)
 
     save(fullfile(SaveFolder, sprintf('%s_cen_tr%d_mc%d.mat', cur, tr_tag, seed)), ...
         'smse', 'rmse', 'nlpd', 't_train', 't_test', ...
+        't_train_total', 't_test_total', ...
         't_train_per_point', 't_test_per_point', ...
+        't_cen_local_gp_train', 't_cen_test_local_prediction', ...
+        't_cen_aggregation', ...
         'comm_train', 'comm_test', ...
         'cur', 'seed', 'train_ratio', 'smse_curve', 'rmse_curve');
 end

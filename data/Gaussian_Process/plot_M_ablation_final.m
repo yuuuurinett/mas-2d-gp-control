@@ -5,7 +5,7 @@
 %   Top-left:  SMSE    Top-right: RMSE
 %   Bot-left:  MSLL    Bot-right: Train Time (ms/pt)
 %
-% Two versions saved per dataset:
+% One version saved per dataset:
 %   _full : full M range
 %   _zoom : zoomed in to the flat region (last ~1/3 of M range)
 %
@@ -13,7 +13,7 @@
 %   - Shaded band (mean ± std) across full M range
 %   - Explicit error bars every few M points for clarity
 %
-% Output: Result/Figures/M_ablation_final/{without_MOE, with_MOE}/
+% Output: Result/Figures/M_ablation_final/without_MOE/
 
 clear; clc; close all;
 
@@ -29,43 +29,33 @@ tr_tag      = round(train_ratio * 100);
 mc_list     = 1:10;
 n_mc        = numel(mc_list);
 
-M_default   = 100:100:2500;
+M_default   = 100:100:2000;
 M_puma      = 100:20:500;
 
 % Zoom x-ranges (tightly focused on flat/convergence region)
-zoom_default = [1700, 2500];   % last ~1/3 of 100:100:2500
+zoom_default = [1000, 2000];   % flat/convergence region after cropping M > 2000
 zoom_puma    = [360,  500];    % last portion of 100:20:500
-
-% Low/Medium/High representative points (for strong error bars)
-LMH_default = [500, 1500, 2500];
-LMH_puma    = [100, 300,  500];
 
 %% ==================== Plot style ====================
 
 LineWidth      = 2.2;
-MarkerSize     = 5.5;
-ShadeAlpha     = 0.25;    % shaded band opacity (was 0.12, now more visible)
-ErrLineWidth   = 2.2;     % error bar line width
-CapSize        = 10;      % error bar cap size
-ErrEvery       = 3;       % draw error bar every N M-points
+MarkerSize     = 4.5;
+ShadeAlpha     = 0.45;    % stronger shaded band for mean ± std
 
 AxisFontSize   = 12;
 LabelFontSize  = 13;
 TitleFontSize  = 14;
 SgtFontSize    = 16;
-LegFontSize    = 12;
+LegFontSize    = 10;
 
 %% ==================== Figure versions ====================
 
 versions(1).name         = 'without_MOE';
 versions(1).methods      = {'poe','gpoe','bcm','rbcm'};
 versions(1).labels       = {'POE','GPOE','BCM','RBCM'};
-versions(1).markers      = {'o','s','d','v'};
+versions(1).markers      = {'none','none','none','none'};
 
-versions(2).name         = 'with_MOE';
-versions(2).methods      = {'poe','gpoe','moe','bcm','rbcm'};
-versions(2).labels       = {'POE','GPOE','MOE','BCM','RBCM'};
-versions(2).markers      = {'o','s','^','d','v'};
+% MOE is intentionally omitted from the final M-ablation figures.
 
 %% ==================== Metrics ====================
 % {field_in_mat,  y_label,               transform}
@@ -75,6 +65,7 @@ metric_defs = {
     'rmse',               'RMSE',                  'direct';
     'msll',               'MSLL',                  'direct';
     't_train_per_point',  'Train Time (ms/pt)',     'direct';
+    't_test_per_point',   'Test Time (ms/pt)',      'direct';
 };
 n_metrics = size(metric_defs, 1);
 
@@ -99,16 +90,14 @@ for vi = 1:numel(versions)
 
         if strcmp(dname, 'PUMADYN32NM')
             M_list    = M_puma;
-            LMH       = LMH_puma;
             zoom_xr   = zoom_puma;
             xtk       = 100:100:500;
             xtk_zoom  = 400:20:500;
         else
             M_list    = M_default;
-            LMH       = LMH_default;
             zoom_xr   = zoom_default;
-            xtk       = 500:500:2500;
-            xtk_zoom  = 1700:200:2500;
+            xtk       = 500:500:2000;
+            xtk_zoom  = 1000:200:2000;
         end
 
         nM = numel(M_list);
@@ -178,8 +167,8 @@ for vi = 1:numel(versions)
             x_range = view_xranges{view_i};
             x_ticks = view_xticks{view_i};
 
-            fig = figure('Color','w', 'Units','centimeters', 'Position',[2,2,34,22]);
-            tlo = tiledlayout(2, 2, 'TileSpacing','compact', 'Padding','compact');
+            fig = figure('Color','w', 'Units','centimeters', 'Position',[2,2,36,22]);
+            tlo = tiledlayout(2, 3, 'TileSpacing','compact', 'Padding','compact');
 
             leg_handles = gobjects(nA, 1);
 
@@ -202,7 +191,7 @@ for vi = 1:numel(versions)
                     mk = ver.markers{ai};
 
                     %-- 1. Shaded mean±std band (full M range, skip for Train Time) --%
-                    if ~contains(metric_defs{ki,2}, 'Time')
+                    if true
                         xb  = M_list(:)';
                         yup = (ym + ys);
                         ylo = (ym - ys);
@@ -226,21 +215,6 @@ for vi = 1:numel(versions)
                         leg_handles(ai) = h;
                     end
 
-                    %-- 3. Error bars every ErrEvery points in visible range --%
-                    all_idx    = find(x_mask);
-                    err_idx    = all_idx(1:ErrEvery:end);
-                    % always include LMH points
-                    [~, lmh_i] = ismember(LMH, M_list);
-                    lmh_i      = lmh_i(lmh_i > 0 & M_list(lmh_i) >= x_range(1) ...
-                                       & M_list(lmh_i) <= x_range(2));
-                    err_idx    = unique([err_idx(:); lmh_i(:)])';
-
-                    if ~isempty(err_idx)
-                        errorbar(ax, M_list(err_idx), ym(err_idx), ys(err_idx), ...
-                            'LineStyle','none', 'Color', c, ...
-                            'LineWidth', ErrLineWidth, 'CapSize', CapSize, ...
-                            'HandleVisibility','off');
-                    end
                 end
 
                 %-- Axis formatting --%
@@ -272,10 +246,12 @@ for vi = 1:numel(versions)
                     'FontSize', TitleFontSize, 'FontWeight','bold');
             end
 
-            % Legend (outside right)
+            % Legend in the sixth tile
+            ax_leg = nexttile(tlo);
+            axis(ax_leg, 'off');
             valid_h = leg_handles(isgraphics(leg_handles));
             valid_l = ver.labels(isgraphics(leg_handles));
-            legend(valid_h, valid_l, 'Location','eastoutside', 'Box','off', ...
+            legend(ax_leg, valid_h, valid_l, 'Location','northwest', 'Box','off', ...
                 'FontName','Times New Roman', 'FontSize', LegFontSize);
 
             % Super title

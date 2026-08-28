@@ -12,6 +12,7 @@ M         = NumInducingPoints;
 y_dim     = 2;
 prior_var = SigmaF^2;
 p_dim     = 2 * y_dim;
+aggregation_cfg = control_aggregation_parameters();
 
 %% 1. 拓扑参数
 % 用循环无向图（和dataset实验一致）
@@ -30,24 +31,32 @@ for n = 1:AgentQuantity
         x_m = InducingPoints_Coordinates(:, m);
         [mu_n, var_n] = LocalGP_set{n}.predict(x_m);
         for d = 1:y_dim
-            vs = max(var_n(d), 1e-6);
-            b  = max(min(0.5*(log(prior_var)-log(vs)), 10), eps);
+            vs = max(var_n(d),aggregation_cfg.posterior_var_floor);
+            raw_beta = 0.5*(log(prior_var)-log(vs));
+            beta_gpoe = max(min(raw_beta, ...
+                aggregation_cfg.gpoe_beta_max),eps);
+            beta_rbcm = max(min(raw_beta, ...
+                aggregation_cfg.rbcm_beta_max),eps);
             switch method
                 case 'poe'
                     Pi(2*d-1,n,m) = AgentQuantity * mu_n(d) / vs;
                     Pi(2*d,  n,m) = AgentQuantity / vs;
                 case 'gpoe'
-                    Pi(2*d-1,n,m) = AgentQuantity * b * mu_n(d) / vs;
-                    Pi(2*d,  n,m) = AgentQuantity * b / vs;
+                    Pi(2*d-1,n,m) = AgentQuantity*beta_gpoe*mu_n(d)/vs;
+                    Pi(2*d,n,m) = AgentQuantity*beta_gpoe/vs;
                 case 'moe'
                     Pi(2*d-1,n,m) = AgentQuantity * mu_n(d);
                     Pi(2*d,  n,m) = AgentQuantity * (vs + mu_n(d)^2);
                 case 'bcm'
                     Pi(2*d-1,n,m) = AgentQuantity * mu_n(d) / vs;
-                    Pi(2*d,  n,m) = AgentQuantity / vs - (AgentQuantity-1)/prior_var;
+                    Pi(2*d,n,m) = AgentQuantity/vs- ...
+                        aggregation_cfg.bcm_prior_scale* ...
+                        (AgentQuantity-1)/prior_var;
                 case 'rbcm'
-                    Pi(2*d-1,n,m) = AgentQuantity * b * mu_n(d) / vs;
-                    Pi(2*d,  n,m) = AgentQuantity * b / vs + (1 - AgentQuantity*b)/prior_var;
+                    Pi(2*d-1,n,m) = ...
+                        AgentQuantity*beta_rbcm*mu_n(d)/vs;
+                    Pi(2*d,n,m) = AgentQuantity*beta_rbcm/vs+ ...
+                        (1-AgentQuantity*beta_rbcm)/prior_var;
             end
         end
     end

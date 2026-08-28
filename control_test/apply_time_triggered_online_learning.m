@@ -1,7 +1,9 @@
 function [LocalGP_set, online_trigger_set, online_trigger_count] = ...
     apply_time_triggered_online_learning(LocalGP_set, online_trigger_set, ...
     online_trigger_count, t_Nr, x_all_matrix, unknown_scale, disturbance_scale)
-% Add one online sample per agent at every simulation step.
+% Add one local sample for every agent at a scheduled learning update.
+% Each agent owns and counts its own GP dataset.  This helper implements the
+% experiment's 0.1 s time-triggered acquisition, not the shared code's ET.
 
 AgentQuantity = numel(LocalGP_set);
 y_dim = LocalGP_set{1}.y_dim;

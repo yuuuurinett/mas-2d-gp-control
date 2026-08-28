@@ -1,8 +1,23 @@
-function [TrackingError_vector, t_set] = run_simulation_cen(CurrentMode, SaveFolderName, SaveFileName, use_formation)
+function [TrackingError_vector, t_set] = run_simulation_cen( ...
+    CurrentMode,SaveFolderName,SaveFileName,use_formation, ...
+    InitialSeedOverride,OfflineDataQuantityOverride, ...
+    UnknownScaleOverride,DisturbanceScaleOverride)
 if nargin < 4, use_formation = true; end
+if nargin < 5 || isempty(InitialSeedOverride)
+    InitialSeedOverride = [];
+end
+if nargin < 6 || isempty(OfflineDataQuantityOverride)
+    OfflineDataQuantityOverride = [];
+end
+if nargin < 7, UnknownScaleOverride = []; end
+if nargin < 8, DisturbanceScaleOverride = []; end
 rng(0);
-UnknownScale = 0.1;
+UnknownScale = 0.2;
 DisturbanceScale = 0.1;
+if ~isempty(UnknownScaleOverride), UnknownScale = UnknownScaleOverride; end
+if ~isempty(DisturbanceScaleOverride)
+    DisturbanceScale = DisturbanceScaleOverride;
+end
 %% 1. System Parameters
 SystemOrder = 2; q_dim = 2; x_dim = q_dim * SystemOrder;
 m1 = 1; m2 = 1; L1 = 1; L2 = 1; g = 9.8;
@@ -49,8 +64,14 @@ chi = sqrt((1 + norm([t_vec, Lambda])^2) * max_eig_Pz / min_eig_Pz) * ...
 
 %% 4. Time
 t_start = 0; t_end = 10; t_step = 0.01;
+t_end_override = str2double(getenv('CONTROL_SIM_END_TIME'));
+if isfinite(t_end_override) && t_end_override > 0
+    t_end = t_end_override;
+end
 t_set = t_start:t_step:t_end;
 T = numel(t_set);
+OnlineUpdateInterval = 0.1;
+OnlineUpdateStep = max(1,round(OnlineUpdateInterval/t_step));
 
 %% 5. Reference Trajectory
 [xl_set, xlr_set, ~] = Manipulator_2D_2DoF_LeaderDynamics(t_set, L1);
@@ -71,9 +92,26 @@ SigmaF = 1; SigmaL = 0.5*ones(x_dim,1);
 GP_tau = 1e-8; GP_delta = 0.1; y_dim = q_dim;
 DomainScale = 1.5;
 MaxDataQuantity_set     = 600*ones(AgentQuantity,1);
-OfflineDataQuantity_set = zeros(AgentQuantity,1);
+DefaultOfflineDataQuantity = 350;
 SigmaN_set = 0.01*ones(AgentQuantity,1);
 prior_var = SigmaF^2;
+aggregation_cfg = control_aggregation_parameters();
+
+mode_lower = lower(CurrentMode);
+dac_methods = {'poe','gpoe','moe','bcm','rbcm'};
+offline_methods = strcat(dac_methods, '_offline');
+is_offline_mode = ismember(mode_lower, offline_methods);
+base_mode = strrep(mode_lower, '_offline', '');
+if is_offline_mode
+    if isempty(OfflineDataQuantityOverride)
+        OfflineDataQuantity = DefaultOfflineDataQuantity;
+    else
+        OfflineDataQuantity = OfflineDataQuantityOverride;
+    end
+else
+    OfflineDataQuantity = 0;
+end
+OfflineDataQuantity_set = OfflineDataQuantity*ones(AgentQuantity,1);
 
 LocalGP_set = cell(AgentQuantity,1);
 for n = 1:AgentQuantity
@@ -131,8 +169,12 @@ vartheta_bar = xi * chi * norm( ...
     + eta_underline_set);
 
 %% 8. Initial State
-rng(42);  % 固定初始状态seed，确保所有方法一致
-    x_all = rand(x_dim*AgentQuantity, 1);
+if ~isempty(InitialSeedOverride)
+    rng(InitialSeedOverride);
+else
+    rng(42);  % 固定初始状态seed，确保所有方法一致
+end
+x_all = rand(x_dim*AgentQuantity, 1);
 x_all_set = nan(x_dim*AgentQuantity, T);
 x_all_set(:,1) = x_all;
 vartheta_all_set = nan(x_dim*AgentQuantity, T);
@@ -143,6 +185,7 @@ f_true_matrix = zeros(y_dim, AgentQuantity);
 TrackingError_vector = zeros(1, T);
 f_hat_all_set  = nan(y_dim, AgentQuantity, T);
 f_true_all_set = nan(y_dim, AgentQuantity, T);
+prediction_error_norm_vector = nan(1,T);
 
 online_trigger_set = zeros(AgentQuantity, T);
 online_trigger_count = zeros(AgentQuantity, 1);
@@ -167,6 +210,15 @@ for t_Nr = 1:T-1
 
     TrackingError_vector(t_Nr) = norm(vartheta_all);
 
+    % Add the current measurement before the current GP prediction.
+    is_online_update = mod(t_Nr-1,OnlineUpdateStep) == 0;
+    if is_online_update && ~is_offline_mode && ~strcmpi(CurrentMode,'exact')
+        [LocalGP_set, online_trigger_set, online_trigger_count] = ...
+            apply_time_triggered_online_learning(LocalGP_set, ...
+            online_trigger_set, online_trigger_count, t_Nr, x_all_matrix, ...
+            UnknownScale, DisturbanceScale);
+    end
+
     [phi_cell, r_matrix, e_cell] = Manipulator_2D_2DoF_ConsensusLaw( ...
         vartheta_cell, x_tilde_cell, x_l_r, MultiAgentSystem, c, lambda_set, s_r_cell);
 
@@ -188,22 +240,32 @@ for t_Nr = 1:T-1
         for d = 1:y_dim
             mu_a  = mu_all(d,:)';
             var_a = var_all(d,:)';
-            beta  = max(0.5*(log(prior_var) - log(var_a)), eps);
-            switch lower(CurrentMode)
+            var_a = max(var_a,aggregation_cfg.posterior_var_floor);
+            raw_beta = 0.5*(log(prior_var)-log(var_a));
+            beta_gpoe = max(min(raw_beta, ...
+                aggregation_cfg.gpoe_beta_max),eps);
+            beta_rbcm = max(min(raw_beta, ...
+                aggregation_cfg.rbcm_beta_max),eps);
+            switch base_mode
                 case 'moe'
                     mu_agg(d) = mean(mu_a);
                 case 'gpoe'
-                    prec = sum(beta./var_a);
-                    mu_agg(d) = sum(beta.*mu_a./var_a) / max(prec, eps);
+                    prec = sum(beta_gpoe./var_a);
+                    mu_agg(d) = sum(beta_gpoe.*mu_a./var_a) / ...
+                        max(prec,aggregation_cfg.precision_floor);
                 case 'poe'
                     prec = sum(1./var_a);
                     mu_agg(d) = sum(mu_a./var_a) / max(prec, eps);
                 case 'bcm'
-                    prec = sum(1./var_a) - (AgentQuantity-1)/prior_var;
-                    mu_agg(d) = sum(mu_a./var_a) / max(prec, eps);
+                    prec = sum(1./var_a)-aggregation_cfg.bcm_prior_scale* ...
+                        (AgentQuantity-1)/prior_var;
+                    mu_agg(d) = sum(mu_a./var_a) / ...
+                        max(prec,aggregation_cfg.precision_floor);
                 case 'rbcm'
-                    prec = sum(beta./var_a) + (1-sum(beta))/prior_var;
-                    mu_agg(d) = sum(beta.*mu_a./var_a) / max(prec, eps);
+                    prec = sum(beta_rbcm./var_a)+ ...
+                        (1-sum(beta_rbcm))/prior_var;
+                    mu_agg(d) = sum(beta_rbcm.*mu_a./var_a) / ...
+                        max(prec,aggregation_cfg.precision_floor);
             end
         end
         mu_agg = max(-30, min(30, mu_agg));
@@ -216,6 +278,8 @@ for t_Nr = 1:T-1
     end
     f_hat_all_set(:,:,t_Nr)  = f_hat_matrix;
     f_true_all_set(:,:,t_Nr) = f_true_matrix;
+    prediction_error_norm_vector(t_Nr) = ...
+        norm(f_true_matrix(:)-f_hat_matrix(:));
 
     u_cell = Manipulator_2D_2DoF_get_u_cell(x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
 
@@ -228,12 +292,6 @@ for t_Nr = 1:T-1
     vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
         kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
 
-    %% Time-triggered online learning: one sample per agent per step
-    [LocalGP_set, online_trigger_set, online_trigger_count] = ...
-        apply_time_triggered_online_learning(LocalGP_set, ...
-        online_trigger_set, online_trigger_count, t_Nr, x_all_matrix, ...
-        UnknownScale, DisturbanceScale);
-
     % fprintf('t = %6.4f\n', t);
 end
 TrackingError_vector(end) = norm(vartheta_all_set(:,end));
@@ -244,6 +302,8 @@ for n = 1:AgentQuantity
         Manipulator_2D_2DoF_UnknownDynamics(x_all_matrix_end(:,n));
     f_hat_all_set(:,n,end)  = f_hat_matrix(:,n);
 end
+prediction_error_norm_vector(end) = norm(reshape( ...
+    f_true_all_set(:,:,end)-f_hat_all_set(:,:,end),[],1));
 
 elapsed_time = toc;
 fprintf('==================================================');
@@ -260,9 +320,13 @@ if nargin >= 3 && ~isempty(SaveFolderName) && ~isempty(SaveFileName)
     if ~exist(SaveFolderName,'dir'), mkdir(SaveFolderName); end
     save(fullfile(SaveFolderName,[SaveFileName,'.mat']), ...
         't_set','TrackingError_vector','CurrentMode','use_formation',...
-        'f_hat_all_set','f_true_all_set','vartheta_all_set', ...
+        'f_hat_all_set','f_true_all_set','prediction_error_norm_vector', ...
+        'vartheta_all_set', ...
         'online_trigger_set','online_trigger_count','eta_underline_set', ...
-        'vartheta_bar','elapsed_time','UnknownScale','DisturbanceScale');
+        'vartheta_bar','elapsed_time','UnknownScale','DisturbanceScale', ...
+        'aggregation_cfg', ...
+        'OfflineDataQuantity','is_offline_mode', ...
+        'OnlineUpdateInterval','OnlineUpdateStep');
 end
 end
 
