@@ -2,7 +2,8 @@ function [TrackingError_vector, t_set] = run_simulation_inducing_point( ...
     CurrentMode, SaveFolderName, SaveFileName, use_formation, ...
     UnknownScaleOverride, DisturbanceScaleOverride, OfflineDataQuantityOverride, ...
     InitialSeedOverride)
-% Pure inducing-point online-learning simulation.
+% Pure inducing-point online-learning simulation. Online data acquisition
+% is periodic; event triggers below apply to inducing-point communication.
 %
 % Purpose of this version:
 %   Keep only the core algorithmic logic for advisor discussion.
@@ -22,23 +23,18 @@ function [TrackingError_vector, t_set] = run_simulation_inducing_point( ...
 %   5) IP-AC restarts when the inducing-point information P is refreshed.
 %      Xi^(0)=P_current, while the last values actually broadcast to
 %      neighbors persist across windows. The fixed R periodic ET-AC rounds
-%      are spread over the following real 0.1 s physical-time window; the
-%      controller therefore uses the current intermediate Xi at each step.
+%      use the configured communication interval and stop when the R-round
+%      budget is exhausted; the controller uses intermediate Xi values.
 %   5) A MaskedGP is rebuilt from the current (not terminal) DAC state.
 %   6) For inducing-point modes, the controller always uses this shared
 %      inducing-point MaskedGP prediction. There is no shadow/local switch.
 %
 % Supported modes:
 %   poe, gpoe, moe, bcm, rbcm                 : IP-DAC
-%   poe_offline, gpoe_offline, moe_offline,
-%   bcm_offline, rbcm_offline                 : offline IP-DAC
 %   poe_ac, gpoe_ac, moe_ac, bcm_ac, rbcm_ac : IP-AC
-%   poe_ac_offline, ..., rbcm_ac_offline      : offline IP-AC
-%   local                                    : LocalGP only baseline
 %   without_gp                               : zero compensation baseline
 %   without_gp_unknown0                      : nominal baseline with no true unknown term
 %   exact                                    : exact unknown dynamics baseline
-
 
 if nargin < 4
     use_formation = true;
@@ -74,7 +70,7 @@ ACFixedIterations = get_env_positive_integer( ...
 % learning is deliberately fixed to the per-agent dataset convention.
 OnlineAgentPolicy = 'all_agents';
 
-UnknownScale = 0.2;
+UnknownScale = 0.1;
 % DisturbanceScale scales only the GP observation noise.
 DisturbanceScale = 0.1;
 if ~isempty(UnknownScaleOverride)
@@ -106,6 +102,12 @@ ACPeriodicSigma = get_env_positive_scalar( ...
     'CONTROL_AC_PERIODIC_SIGMA',0.3);
 ACForceFullBroadcast = strcmp(strtrim(getenv( ...
     'CONTROL_AC_FORCE_FULL_BROADCAST')),'1');
+% Opt-in diagnostic trial: when a new 0.1 s AC problem is initialized,
+% broadcast the new local P once and synchronize the cached packet.  This
+% is disabled by default so existing MC runs and all other methods retain
+% their established behavior.
+ACSyncCacheOnProjectionRefresh = strcmp(strtrim(getenv( ...
+    'CONTROL_AC_SYNC_CACHE_ON_PROJECTION_REFRESH')),'1');
 % Diagnostics store the two scalar sides of the paper's squared,
 % agent-level detector directly:
 %   ||Xi_i-XiHat_i||_F^2/(pM)
@@ -113,9 +115,24 @@ ACForceFullBroadcast = strcmp(strtrim(getenv( ...
 ACDetectorStoresSquared = true;
 DACTriggerEpsilon = get_env_positive_scalar( ...
     'CONTROL_DAC_TRIGGER_EPSILON', 5e-3);
+% Optional refresh safeguard for a piecewise-changing P[k]. It preserves
+% the persistent Zeta state, but makes the newly refreshed local Xi visible
+% to neighbors immediately instead of waiting for the ordinary detector.
+DACForceProjectionRefreshBroadcast = strcmp(strtrim(getenv( ...
+    'CONTROL_DAC_FORCE_PROJECTION_REFRESH_BROADCAST')),'1');
+refresh_rounds_text=strtrim(getenv('CONTROL_DAC_REFRESH_CORRECTION_ROUNDS'));
+if isempty(refresh_rounds_text)
+    DACRefreshCorrectionRounds=0;
+else
+    DACRefreshCorrectionRounds=str2double(refresh_rounds_text);
+    if ~isfinite(DACRefreshCorrectionRounds) || DACRefreshCorrectionRounds<0 || ...
+            DACRefreshCorrectionRounds~=round(DACRefreshCorrectionRounds)
+        error('CONTROL_DAC_REFRESH_CORRECTION_ROUNDS must be a nonnegative integer.');
+    end
+end
 
 %% 3. Controller parameters
-c = 10;
+c = get_env_positive_scalar('CONTROL_CONTROLLER_GAIN_C',10);
 lambda_set = [1; 1];
 lambda_n = lambda_set(end);
 lambda_vector = lambda_set(1:SystemOrder-1);
@@ -147,21 +164,74 @@ end
 %% 4. Time
 
 t_start = 0;
-t_end = 10;
+t_end = 20;
 t_end = get_env_positive_scalar('CONTROL_SIM_END_TIME', t_end);
 t_step = 0.01;
-t_set = t_start:t_step:t_end;
-T = numel(t_set);
+simulation_step_text = strtrim(getenv('CONTROL_SIM_TIME_STEP'));
+if ~isempty(simulation_step_text)
+    t_step = str2double(simulation_step_text);
+    if ~isfinite(t_step) || t_step <= 0
+        error('CONTROL_SIM_TIME_STEP must be a positive finite scalar.');
+    end
+end
 IPOnlineUpdateInterval = 0.1;
-IPOnlineUpdateStep = max(1, round(IPOnlineUpdateInterval / t_step));
+ACIndependentClockTrial = strcmp(getenv('CONTROL_AC_INDEPENDENT_CLOCK_TRIAL'),'1');
+update_steps_exact = IPOnlineUpdateInterval/t_step;
+if ACIndependentClockTrial
+    assert(endsWith(lower(CurrentMode),'_ac'), ...
+        'Independent-clock trial is limited to online IP-AC.');
+    trial_interval = get_env_positive_scalar('CONTROL_AC_COMMUNICATION_INTERVAL',0.015);
+    % Exact union of the nominal physical, P-refresh and detector clocks.
+    % Splitting integration at boundaries does not round the 0.1 s P clock.
+    t_set = unique(round([0:t_step:t_end,0:IPOnlineUpdateInterval:t_end, ...
+        0:trial_interval:t_end,t_end],12));
+    IPOnlineUpdateStep = NaN; % no constant number of physical steps/window
+    OnlineUpdateSchedule = abs(t_set/IPOnlineUpdateInterval- ...
+        round(t_set/IPOnlineUpdateInterval))<1e-9;
+    ACCheckSchedule = abs(t_set/trial_interval-round(t_set/trial_interval))<1e-9;
+    assert(ACFixedIterations>=ceil(IPOnlineUpdateInterval/trial_interval), ...
+        'Round cap must not truncate the independent periodic detector.');
+else
+if update_steps_exact < 1 || ...
+        abs(update_steps_exact-round(update_steps_exact)) > 1e-9
+    error('The simulation step must divide the fixed 0.1 s P-update period exactly.');
+end
+if abs(t_end/t_step-round(t_end/t_step)) > 1e-9
+    error('The simulation end time must be an integer multiple of its step.');
+end
+t_set = t_start:t_step:t_end;
+IPOnlineUpdateStep = round(update_steps_exact);
+OnlineUpdateSchedule = mod(0:numel(t_set)-1,IPOnlineUpdateStep)==0;
+ACCheckSchedule = true(size(t_set));
+end
+SimulationStep = t_step; % nominal maximum; trial can split at clock boundaries
+IntegrationStepSet = diff(t_set);
+T = numel(t_set);
 ACOnlineUpdateInterval = IPOnlineUpdateInterval;
 ACOnlineUpdateStep = IPOnlineUpdateStep;
+progress_print_step = max(1,round(1/t_step));
 EnableProjectionDiagnostics = strcmp(getenv('CONTROL_IP_PROJECTION_DIAGNOSTICS'), '1');
+EnablePReferenceHistory = strcmp(getenv('CONTROL_IP_REFERENCE_HISTORY'),'1');
+P_reference_history = {};
+P_reference_time = [];
+Precision_reference_history = {};
 EnableACTriggerDiagnostics = strcmp( ...
     getenv('CONTROL_AC_TRIGGER_DIAGNOSTICS'),'1');
-AggregationParameters = control_aggregation_parameters();
-RBCMBetaMax = AggregationParameters.rbcm_beta_max;
-
+% Optional read-only reference logging; never feeds the controller or detector.
+EnableACReferenceDiagnostics = strcmp( ...
+    getenv('CONTROL_AC_REFERENCE_DIAGNOSTICS'),'1');
+ac_reference_history = {};
+ac_reference_time = [];
+% One-off diagnostic: log the raw (pre-decode) Xi_ac/Xi_hat_ac vectors for
+% agent 4 at the first check of every AC window, so the numerator (xi1)
+% and denominator (xi2) components can be inspected separately when the
+% trigger detector's raw LHS-RHS gap grows over time even though the
+% decoded phi and physical tracking error stay bounded. Read-only; never
+% feeds the controller or detector.
+EnableACXiDiagnostics = strcmp(getenv('CONTROL_AC_XI_DIAGNOSTICS'),'1');
+ac_xi_window_start_history = {};
+ac_xi_hat_window_start_history = {};
+ac_xi_window_start_time = [];
 %% 5. Reference trajectory and formation offsets
 [xl_set, xlr_set, ~] = Manipulator_2D_2DoF_LeaderDynamics(t_set, L1);
 
@@ -178,7 +248,7 @@ if ~use_formation
     sr_all_set = zeros(size(sr_all_set));
 end
 
-%% 6. LocalGPs: zero offline data by default
+%% 6. LocalGPs: empty online models or fixed offline models
 SigmaF = 1;
 % Separate spatial and velocity length scales.  Defaults reproduce the
 % previous isotropic kernel; environment overrides are useful when testing
@@ -189,18 +259,40 @@ VelocityLengthScale = get_env_positive_scalar( ...
     'CONTROL_IP_VELOCITY_LENGTH_SCALE',0.5);
 SigmaL = [PositionLengthScale*ones(2,1); ...
           VelocityLengthScale*ones(2,1)];
-SigmaN = 0.01;
+SigmaN = 0.05;
+AggregationParameters = control_aggregation_parameters(SigmaN);
+RBCMBetaMax = AggregationParameters.rbcm_beta_max;
 % Numerical jitter used only when reconstructing a MaskedGP from the
 % inducing-point targets. It is separate from the local-GP noise above.
 IPReconstructionSigmaN = get_env_positive_scalar( ...
     'CONTROL_IP_RECONSTRUCTION_SIGMA_N',1e-6);
+% The local GP keeps the shared-code kernel above.  The reconstruction GP
+% may use a separate kernel because it interpolates a fixed inducing-point
+% lattice rather than raw observations.  Defaults preserve old behavior.
+IPReconstructionPositionLengthScale = get_env_positive_scalar( ...
+    'CONTROL_IP_RECONSTRUCTION_POSITION_LENGTH_SCALE',PositionLengthScale);
+IPReconstructionVelocityLengthScale = get_env_positive_scalar( ...
+    'CONTROL_IP_RECONSTRUCTION_VELOCITY_LENGTH_SCALE',VelocityLengthScale);
+IPReconstructionSigmaL = [IPReconstructionPositionLengthScale*ones(2,1); ...
+    IPReconstructionVelocityLengthScale*ones(2,1)];
+% Advisor-specified pointwise GP error-bound parameters.  The legacy
+% LocalGP predict() bound is intentionally not used because it computes a
+% different Lipschitz-based beta/gamma expression.
+PredictionBoundBeta = 3.0;
+PredictionBoundGamma = 0.01;
 GP_tau = 1e-8;
 GP_delta = 0.1;
 DomainScale = 1.5;
 X_min = DomainScale * [-1,-1,-1,-1];
 X_max = DomainScale * [ 1, 1, 1, 1];
 
-MaxDataQuantity = 600;
+% The shared-code value remains the default. Controlled experiments can
+% impose the same per-agent data budget across all GP methods.
+MaxDataQuantity = round(get_env_positive_scalar( ...
+    'CONTROL_GP_MAX_DATA_QUANTITY',350));
+if MaxDataQuantity < 1
+    error('CONTROL_GP_MAX_DATA_QUANTITY must round to a positive integer.');
+end
 DefaultOfflineDataQuantity = 350;
 
 mode_lower = lower(CurrentMode);
@@ -210,20 +302,10 @@ if is_without_gp_unknown0_mode
 end
 dac_methods = {'poe','gpoe','moe','bcm','rbcm'};
 ac_methods  = {'poe_ac','gpoe_ac','moe_ac','bcm_ac','rbcm_ac'};
-offline_methods = strcat(dac_methods, '_offline');
-offline_ac_methods = strcat(ac_methods, '_offline');
-is_offline_ip_mode = ismember(mode_lower, [offline_methods, offline_ac_methods]);
-is_dac_mode = ismember(mode_lower, [dac_methods, offline_methods]);
-is_ac_mode  = ismember(mode_lower, [ac_methods, offline_ac_methods]);
-if is_offline_ip_mode
-    if isempty(OfflineDataQuantityOverride)
-        OfflineDataQuantity = DefaultOfflineDataQuantity;
-    else
-        OfflineDataQuantity = OfflineDataQuantityOverride;
-    end
-else
-    OfflineDataQuantity = 0;
-end
+is_offline_ip_mode = false; % saved-field compatibility; no IP offline variant.
+is_dac_mode = ismember(mode_lower,dac_methods);
+is_ac_mode  = ismember(mode_lower,ac_methods);
+OfflineDataQuantity = 0;
 
 LocalGP_set = cell(AgentQuantity, 1);
 for AgentNr = 1:AgentQuantity
@@ -235,19 +317,7 @@ for AgentNr = 1:AgentQuantity
     LocalGP_set{AgentNr}.xMin  = X_min;
 end
 
-if is_offline_ip_mode
-    for AgentNr = 1:AgentQuantity
-        X_in = 2 * (rand(x_dim, OfflineDataQuantity) - 0.5) * DomainScale;
-        Y_in = UnknownScale * Manipulator_2D_2DoF_UnknownDynamics(X_in) + ...
-            DisturbanceScale * LocalGP_set{AgentNr}.SigmaN * ...
-            randn(y_dim, OfflineDataQuantity);
-        LocalGP_set{AgentNr}.add_Alldata(X_in, Y_in);
-    end
-end
-
-if is_offline_ip_mode
-    fprintf('Offline data: %d per agent. Online update: disabled.\n', OfflineDataQuantity);
-elseif is_ac_mode
+if is_ac_mode
     fprintf('Offline data: %d per agent. IP online update interval: %.3f s.\n', ...
         OfflineDataQuantity, IPOnlineUpdateInterval);
 else
@@ -258,17 +328,16 @@ fprintf('UnknownScale = %.3f, DisturbanceScale = %.3f.\n', UnknownScale, Disturb
 
 %% 7. Mode and inducing-point setup
 is_ip_mode  = is_dac_mode || is_ac_mode;
-is_local_mode = strcmpi(mode_lower, 'local');
 is_exact_mode = strcmpi(mode_lower, 'exact');
 is_without_gp_mode = strcmpi(mode_lower, 'without_gp') || is_without_gp_unknown0_mode;
 
 if is_dac_mode
-    base_method = strrep(mode_lower, '_offline', '');
+    base_method = mode_lower;
     ConsensusInputTriggerTol = NaN;
 elseif is_ac_mode
-    base_method = strrep(strrep(mode_lower, '_offline', ''), '_ac', '');
+    base_method = strrep(mode_lower,'_ac','');
     ConsensusInputTriggerTol = NaN;
-elseif is_local_mode || is_exact_mode || is_without_gp_mode
+elseif is_exact_mode || is_without_gp_mode
     ConsensusInputTriggerTol = NaN;
     if is_without_gp_mode
         base_method = 'without_gp';
@@ -279,25 +348,48 @@ else
     error('Unknown mode: %s', CurrentMode);
 end
 
-% Keep DAC unchanged. IP-AC performs a fixed number of communication
-% checks over each real 0.1 s P-reference window. The checks are no longer
-% executed instantaneously when P changes: they are distributed over the
-% physical integration steps in that window.
-Kappa_P_DAC = 1;
+% DAC and AC use different logic.  IP-DAC is a persistent dynamic tracker:
+% it evolves and checks its event trigger at every physical simulation step
+% while P refreshes every 0.1 s.  IP-AC restarts at each P refresh and uses
+% exactly R chronological communication rounds in that 0.1 s window.
+Kappa_P_DAC = get_env_positive_scalar('CONTROL_DAC_KAPPA_P',3);
+DACUpdateInterval = t_step;
 LegacyACConsensusStep = get_env_positive_scalar( ...
     'CONTROL_AC_CONSENSUS_STEP',0.2);
-ACChecksPerPhysicalStepExact = ACFixedIterations/ACOnlineUpdateStep;
-ACChecksPerPhysicalStep = round(ACChecksPerPhysicalStepExact);
-if ACChecksPerPhysicalStep < 1 || ...
-        abs(ACChecksPerPhysicalStep-ACChecksPerPhysicalStepExact) > 1e-12
-    error(['ACFixedIterations must be an integer multiple of the ten ' ...
-        'physical steps in one 0.1 s P-update window.']);
+interval_override_text = strtrim(getenv( ...
+    'CONTROL_AC_COMMUNICATION_INTERVAL'));
+if ACIndependentClockTrial
+    ACCommunicationInterval = trial_interval;
+    ACChecksPerPhysicalStep = 1; % at most one; ACCheckSchedule determines activity
+    ACTimingMode = 'independent-periodic-clock-reference-boundary-split';
+elseif isempty(interval_override_text)
+    ACChecksPerPhysicalStepExact = ACFixedIterations/ACOnlineUpdateStep;
+    ACChecksPerPhysicalStep = round(ACChecksPerPhysicalStepExact);
+    if ACChecksPerPhysicalStep < 1 || ...
+            abs(ACChecksPerPhysicalStep-ACChecksPerPhysicalStepExact) > 1e-12
+        error(['ACFixedIterations must be an integer multiple of the ' ...
+            'physical steps in one 0.1 s P-update window when no ' ...
+            'communication-interval override is supplied.']);
+    end
+    ACCommunicationInterval = t_step/ACChecksPerPhysicalStep;
+    ACTimingMode = 'physical-time-fixed-rounds-full-window';
+else
+    ACCommunicationInterval = str2double(interval_override_text);
+    if ~isfinite(ACCommunicationInterval) || ACCommunicationInterval <= 0
+        error('CONTROL_AC_COMMUNICATION_INTERVAL must be positive.');
+    end
+    ACChecksPerPhysicalStepExact = t_step/ACCommunicationInterval;
+    ACChecksPerPhysicalStep = round(ACChecksPerPhysicalStepExact);
+    if ACChecksPerPhysicalStep < 1 || ...
+            abs(ACChecksPerPhysicalStep-ACChecksPerPhysicalStepExact) > 1e-12
+        error(['The communication interval must divide the configured ' ...
+            'physical step exactly and cannot exceed it.']);
+    end
+    ACTimingMode = 'physical-time-fixed-R-configurable-interval';
 end
-ACCommunicationInterval = t_step/ACChecksPerPhysicalStep;
 Kappa_P_AC = get_env_positive_scalar( ...
     'CONTROL_AC_KAPPA_P',LegacyACConsensusStep/t_step);
 ACConsensusStep = ACCommunicationInterval*Kappa_P_AC;
-ACTimingMode = 'physical-time-fixed-rounds';
 NumInducingPoints = 400;
 num_inducing_override = str2double(getenv('CONTROL_IP_NUM_INDUCING_POINTS'));
 if isfinite(num_inducing_override) && num_inducing_override > 0
@@ -336,18 +428,38 @@ end
 fprintf('Inducing points: M=%d, source=%s.\n', ...
     NumInducingPoints,InducingPointSource);
 
-DACStepsPerPhysicalStep = get_env_positive_integer( ...
+% Retain both names for saved-file and batch compatibility.  This is the
+% numerical subdivision count of one physical DAC integration interval.
+DACStepsPerUpdate = get_env_positive_integer( ...
     'CONTROL_DAC_STEPS_PER_PHYSICAL_STEP',1);
+DACStepsPerPhysicalStep = DACStepsPerUpdate; % legacy saved-field alias
+positive_laplacian_eigenvalues = eig(L_lap);
+positive_laplacian_eigenvalues = positive_laplacian_eigenvalues( ...
+    positive_laplacian_eigenvalues > 1e-10);
+dac_step_size_for_stability = DACUpdateInterval/DACStepsPerUpdate;
+if dac_step_size_for_stability*Kappa_P_DAC >= ...
+        2/max(positive_laplacian_eigenvalues)
+    error(['Unstable IP-DAC gain: (dt/R)*Kappa_P_DAC must be ' ...
+        'smaller than 2/lambda_max(L).']);
+end
+if is_ac_mode && ACConsensusStep >= ...
+        2/max(positive_laplacian_eigenvalues)
+    error(['Unstable IP-AC gain/interval pair: ' ...
+        'Delta_c*Kappa_P_AC must be smaller than 2/lambda_max(L).']);
+end
 
 %% 8. Initial state
 if ~isempty(InitialSeedOverride)
     rng(InitialSeedOverride);
-elseif ~is_offline_ip_mode
+else
     rng(42);
 end
 x_all = rand(x_dim*AgentQuantity, 1);
 x_all_set = nan(x_dim*AgentQuantity, T);
 x_all_set(:,1) = x_all;
+SimulationDiverged = false;
+DivergenceTime = NaN;
+DivergenceReason = '';
 
 vartheta_all_set = nan(x_dim*AgentQuantity, T);
 vartheta_all_set(:,1) = x_all - s_all_set(:,1) - kron(ones(AgentQuantity,1), xl_set(:,1));
@@ -367,6 +479,21 @@ f_true_all_set = nan(y_dim, AgentQuantity, T);
 f_direct_all_set = nan(y_dim, AgentQuantity, T);
 f_ip_cen_all_set = nan(y_dim, AgentQuantity, T);
 ip_cen_prediction_error_norm_vector = nan(1,T);
+% Three-layer inducing-point prediction-bound diagnostics.  The first
+% index is the queried/controlled agent i; the expert index k is retained
+% where needed to make the weighted bound auditable.
+prediction_error_per_agent_set = nan(AgentQuantity,T);
+prediction_error_bound_set = nan(AgentQuantity,T);
+local_sigma_per_expert_query_set = nan(AgentQuantity,AgentQuantity,T);
+inducing_sigma_per_expert_query_set = nan(AgentQuantity,AgentQuantity,T);
+inducing_weight_per_expert_query_set = nan(AgentQuantity,AgentQuantity,T);
+communication_sigma_per_agent_set = nan(AgentQuantity,T);
+local_eta_weighted_set = nan(AgentQuantity,T);
+inducing_eta_weighted_set = nan(AgentQuantity,T);
+communication_eta_set = nan(AgentQuantity,T);
+local_layer_error_weighted_set = nan(AgentQuantity,T);
+inducing_layer_error_weighted_set = nan(AgentQuantity,T);
+communication_layer_error_set = nan(AgentQuantity,T);
 aggregation_min_abs_den_vector = nan(1,T);
 aggregation_min_signed_den_vector = nan(1,T);
 aggregation_negative_den_count_vector = nan(1,T);
@@ -390,6 +517,7 @@ consensus_input_trigger_count_set = zeros(AgentQuantity,T-1);
 
 MaskedGP = [];
 CenMaskedGP = [];
+InducingLayerGP = [];
 Xi_final = [];
 P_inducing = [];
 P_consensus_reference = [];
@@ -411,15 +539,20 @@ dac_trigger_count_per_agent_point_set = zeros( ...
 dac_inner_broadcast_count_set = zeros(AgentQuantity,T-1);
 dac_iteration_count_set = zeros(1,T-1);
 dac_tracking_error_set = nan(1,T-1);
+dac_average_error_rms_set = nan(1,T-1);
+dac_window_initial_error_rms_set = nan(1,T-1);
 dac_tracking_error_per_agent_set = nan(AgentQuantity,T-1);
 dac_consensus_disagreement_set = nan(1,T-1);
 dac_inner_trigger_instance_set = false( ...
-    AgentQuantity,DACStepsPerPhysicalStep,T-1);
+    AgentQuantity,DACStepsPerUpdate+DACRefreshCorrectionRounds,T-1);
 ac_broadcast_count_set = zeros(AgentQuantity,T-1);
 ac_inner_broadcast_count_set = zeros(AgentQuantity,T-1);
+ac_refresh_sync_count_set = zeros(AgentQuantity,T-1);
 ac_physical_trigger_count_set = zeros(AgentQuantity,T-1);
 ac_iteration_count_set = zeros(1,T-1);
 ac_consensus_disagreement_set = nan(1,T-1);
+ac_average_error_rms_set = nan(1,T-1);
+ac_window_initial_error_rms_set = nan(1,T-1);
 ac_inner_trigger_instance_set = false( ...
     AgentQuantity,ACChecksPerPhysicalStep,T-1);
 ac_tracking_error_history_set = cell(1,T-1);
@@ -433,27 +566,18 @@ else
     ac_trigger_threshold_set = single([]);
 end
 
-if is_ip_mode && ~is_offline_ip_mode
+if is_ip_mode
     fprintf('Mode: %s. Projection refresh: every %.3f s.\n', ...
         CurrentMode, IPOnlineUpdateInterval);
-elseif is_ip_mode
-    fprintf('Mode: %s. Projection refresh: offline initialization only.\n', ...
-        CurrentMode);
 else
     fprintf('Mode: %s. Projection refresh: every simulation step.\n', CurrentMode);
 end
 if is_ip_mode
     if is_dac_mode
-        if is_offline_ip_mode
-            fprintf('Control source: offline LocalGPs aggregated by IP-DAC.\n');
-        else
-            fprintf('Control source: per-agent MaskedGP driven by IP-DAC.\n');
-        end
+        fprintf('Control source: per-agent MaskedGP driven by IP-DAC.\n');
     else
         fprintf('Control source: shared inducing-point MaskedGP.\n');
     end
-elseif is_local_mode
-    fprintf('Control source: LocalGP baseline.\n');
 elseif is_without_gp_mode
     if is_without_gp_unknown0_mode
         fprintf('Control source: zero compensation nominal baseline; true unknown dynamics are disabled.\n');
@@ -487,51 +611,33 @@ for t_Nr = 1:T-1
     vartheta_all = vartheta_all_set(:, t_Nr);
     vartheta_cell = ET_MAS_GP_Leader_vector2cell(vartheta_all, AgentQuantity, SystemOrder);
     TrackingError_vector(t_Nr) = norm(vartheta_all);
-    is_ip_online_step = is_ip_mode && (mod(t_Nr-1, IPOnlineUpdateStep) == 0);
-    is_learning_update_step = (is_ip_mode && is_ip_online_step) || is_local_mode;
+    is_ip_online_step = is_ip_mode && OnlineUpdateSchedule(t_Nr);
     step_online_trigger_count = zeros(AgentQuantity,1);
     has_online_learning_update = false;
 
-    %% 9.1 Per-agent time-triggered LocalGP online update
-    if is_ip_online_step && ~is_offline_ip_mode
+    %% 9.1 Shared online LocalGP update
+    if is_ip_online_step
         % Each agent owns a separate GP dataset.  At every 0.1 s learning
         % instant, all agents add one local data pair; there is no global
         % round-robin scheduler and no competition for a network-wide slot.
         for AgentNr = 1:AgentQuantity
             agent_state_idx = (AgentNr-1)*x_dim + (1:x_dim);
-            agent_tracking_error = norm(vartheta_all(agent_state_idx));
-            online_learning_error_set(AgentNr,t_Nr) = agent_tracking_error;
-
-            x_i = x_all_matrix(:,AgentNr);
-            y_i = UnknownScale * Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
-                  DisturbanceScale * LocalGP_set{AgentNr}.SigmaN * randn(y_dim,1);
-
-            if LocalGP_set{AgentNr}.DataQuantity >= LocalGP_set{AgentNr}.MaxDataQuantity
-                LocalGP_set{AgentNr}.downdateParam(1);
-            end
-            LocalGP_set{AgentNr}.addPoint(x_i, y_i);
-            online_update_count(AgentNr) = online_update_count(AgentNr) + 1;
-            step_online_trigger_count(AgentNr) = 1;
-            has_online_learning_update = true;
+            online_learning_error_set(AgentNr,t_Nr) = ...
+                norm(vartheta_all(agent_state_idx));
         end
-        online_learning_trigger_count_set(:,t_Nr) = step_online_trigger_count;
-    elseif is_learning_update_step && ~is_offline_ip_mode
-        for AgentNr = 1:AgentQuantity
-            x_i = x_all_matrix(:,AgentNr);
-            y_i = UnknownScale * Manipulator_2D_2DoF_UnknownDynamics(x_i) + ...
-                  DisturbanceScale * LocalGP_set{AgentNr}.SigmaN * randn(y_dim,1);
-
-            if LocalGP_set{AgentNr}.DataQuantity >= LocalGP_set{AgentNr}.MaxDataQuantity
-                LocalGP_set{AgentNr}.downdateParam(1);
-            end
-            LocalGP_set{AgentNr}.addPoint(x_i, y_i);
-            online_update_count(AgentNr) = online_update_count(AgentNr) + 1;
-        end
+        [LocalGP_set, online_learning_trigger_count_set, ...
+            online_update_count] = update_local_gps_online( ...
+            LocalGP_set, online_learning_trigger_count_set, ...
+            online_update_count, t_Nr, x_all_matrix, ...
+            UnknownScale, DisturbanceScale);
+        step_online_trigger_count = ...
+            online_learning_trigger_count_set(:,t_Nr);
+        has_online_learning_update = any(step_online_trigger_count);
     end
 
     %% 9.2 Inducing-point projection and ET consensus
     if is_ip_mode
-        should_refresh_projection = (~is_offline_ip_mode && is_ip_online_step && ...
+        should_refresh_projection = (is_ip_online_step && ...
             has_online_learning_update) || ...
             isempty(P_inducing);
         if should_refresh_projection
@@ -540,6 +646,20 @@ for t_Nr = 1:T-1
             [P_inducing, p_dim, var_diag] = gp_masked_aggregation_init( ...
                 LocalGP_set, AgentQuantity, NumInducingPoints, ...
                 InducingPoints_Coordinates, base_method);
+            % Construct the N uncommunicated inducing-layer GPs in one
+            % block model.  All experts share X_ind and reconstruction
+            % hyperparameters, so a single Cholesky factor serves all
+            % N*y_dim target channels.  Only the targets change online.
+            InducingLayerGP = build_or_update_inducing_layer_gp( ...
+                var_diag.local_mu_at_inducing,InducingPoints_Coordinates, ...
+                IPReconstructionSigmaN,SigmaF,IPReconstructionSigmaL, ...
+                x_dim,y_dim,AgentQuantity,InducingLayerGP);
+            if EnablePReferenceHistory
+                P_reference_history{end+1}=single(P_inducing); %#ok<AGROW>
+                P_reference_time(end+1)=t_set(t_Nr); %#ok<AGROW>
+                Precision_reference_history{end+1}=single( ...
+                    var_diag.precision_per_agent_point); %#ok<AGROW>
+            end
 
             % Diagnostic: track how close each agent's local GP posterior
             % variance (at the inducing points) is getting to the
@@ -563,7 +683,7 @@ for t_Nr = 1:T-1
                 CenMaskedGP = build_or_update_shared_maskedgp_from_xi( ...
                     Xi_ip_cen, base_method, AgentQuantity, ...
                     NumInducingPoints, p_dim, InducingPoints_Coordinates, ...
-                    SigmaF, SigmaL, x_dim, y_dim, CenMaskedGP);
+                    SigmaF, IPReconstructionSigmaL, x_dim, y_dim, CenMaskedGP);
             end
 
             if ~isempty(P_previous_projection)
@@ -588,30 +708,42 @@ for t_Nr = 1:T-1
         if is_dac_mode
             % Zeta and Xi_last_trigger are persistent DAC states.  The DAC
             % never declares convergence and never resets when P changes.
-            % Instead, one fixed DAC step is taken at every physical step;
-            % equation (17) alone decides whether communication occurs.
+            % It evolves at every physical step; equation (17) alone
+            % decides whether that step causes communication.
             is_first_dac_step = isempty(Zeta_dac);
             if is_first_dac_step
                 Zeta_dac = zeros(size(P_inducing));
                 Xi_last_trigger = P_inducing;
             end
 
+            P_average = mean(P_inducing,2);
+            if should_refresh_projection
+                Xi_window_initial=P_inducing-Zeta_dac;
+                initial_average_error=Xi_window_initial-P_average;
+                dac_window_initial_error_rms_set(t_Nr)= ...
+                    sqrt(mean(initial_average_error(:).^2));
+            end
+
             step_trigger_count_per_agent_point = zeros( ...
                 AgentQuantity,NumInducingPoints,'uint16');
 
-            % DACStepsPerPhysicalStep is a numerical subdivision of one
-            % physical interval.  Keep the total DAC evolution over that
-            % interval equal to t_step when comparing different round
-            % counts; otherwise R rounds would accelerate DAC by R times.
-            dac_step_size = t_step/DACStepsPerPhysicalStep;
-            for dac_step = 1:DACStepsPerPhysicalStep
+            % Numerical subdivisions preserve one physical integration
+            % interval of total DAC evolution.
+            dac_step_size = DACUpdateInterval/DACStepsPerUpdate;
+            rounds_this_step=DACStepsPerUpdate;
+            if should_refresh_projection
+                rounds_this_step=rounds_this_step+DACRefreshCorrectionRounds;
+            end
+            for dac_step = 1:rounds_this_step
                 L_Xi_hat = laplacian_multiply_agent_dim_local( ...
                     Xi_last_trigger,L_lap);
                 Zeta_dac = Zeta_dac+dac_step_size*Kappa_P_DAC*L_Xi_hat;
                 Xi_now = P_inducing-Zeta_dac;
 
-                force_initial_broadcast = ...
-                    is_first_dac_step && dac_step == 1;
+                force_initial_broadcast = dac_step == 1 && ( ...
+                    is_first_dac_step || ...
+                    (DACForceProjectionRefreshBroadcast && ...
+                    should_refresh_projection));
                 [Xi_last_trigger, triggered_points] = ...
                     dac_equation17_broadcast_update( ...
                     Xi_now, Xi_last_trigger, L_lap, ...
@@ -626,8 +758,9 @@ for t_Nr = 1:T-1
 
             % These errors are diagnostics only.  Neither can stop DAC.
             Xi_final = Xi_now;
-            P_average = mean(P_inducing,2);
             tracking_difference = Xi_now-P_average;
+            dac_average_error_rms_set(t_Nr)= ...
+                sqrt(mean(tracking_difference(:).^2));
             tracking_error_norm = sqrt(sum(tracking_difference.^2,1));
             dac_tracking_error_set(t_Nr) = max(tracking_error_norm(:));
             dac_tracking_error_per_agent_set(:,t_Nr) = reshape( ...
@@ -645,7 +778,7 @@ for t_Nr = 1:T-1
                 end
             end
             dac_consensus_disagreement_set(t_Nr) = consensus_disagreement;
-            dac_iteration_count_set(t_Nr) = DACStepsPerPhysicalStep;
+            dac_iteration_count_set(t_Nr) = rounds_this_step;
 
             step_trigger_count = mean( ...
                 double(step_trigger_count_per_agent_point),2);
@@ -664,9 +797,9 @@ for t_Nr = 1:T-1
 
             MaskedGP = build_agent_maskedgp_from_xi(Xi_final, base_method, ...
                 AgentQuantity, NumInducingPoints, p_dim, InducingPoints_Coordinates, ...
-                SigmaF, SigmaL, x_dim, y_dim, MaskedGP);
+                SigmaF, IPReconstructionSigmaL, x_dim, y_dim, MaskedGP);
 
-        else
+        elseif ~is_dac_mode
             %% IP-AC: fixed R checks spread over the real 0.1 s window
             % A new P reference arrives every 0.1 s. Xi is reset to that P,
             % then exactly ACFixedIterations ET/AC rounds are executed over
@@ -697,18 +830,31 @@ for t_Nr = 1:T-1
                 P_consensus_reference = P_inducing;
                 Xi_ac = P_consensus_reference;
                 P_average_ac = mean(P_consensus_reference,2);
+                initial_average_error=Xi_ac-P_average_ac;
+                ac_window_initial_error_rms_set(t_Nr)= ...
+                    sqrt(mean(initial_average_error(:).^2));
+                if EnableACReferenceDiagnostics
+                    ac_reference_history{end+1} = P_consensus_reference;
+                    ac_reference_time(end+1) = t_set(t_Nr);
+                end
                 ac_round_in_window = 0;
                 ac_solve_count = ac_solve_count+1;
-                if isempty(Xi_hat_ac)
+                if ACSyncCacheOnProjectionRefresh
+                    Xi_hat_ac = Xi_ac;
+                    ac_refresh_sync_count_set(:,t_Nr) = 1;
+                elseif isempty(Xi_hat_ac)
                     Xi_hat_ac = Xi_ac;
                 end
             end
 
             if ~isempty(P_consensus_reference) && ...
-                    ac_round_in_window < ACFixedIterations
+                    ac_round_in_window < ACFixedIterations && ACCheckSchedule(t_Nr)
                 checks_this_step = min(ACChecksPerPhysicalStep, ...
                     ACFixedIterations-ac_round_in_window);
-                step_trigger_count = zeros(AgentQuantity,1);
+                % Refresh synchronization is a real full-packet broadcast
+                % and is included in total communication, but kept separate
+                % from equation-triggered broadcasts in the diagnostics.
+                step_trigger_count = ac_refresh_sync_count_set(:,t_Nr);
                 step_trigger_measure_history = nan( ...
                     AgentQuantity,ACChecksPerPhysicalStep,'single');
                 step_trigger_threshold_history = nan( ...
@@ -749,9 +895,20 @@ for t_Nr = 1:T-1
                         ac_rhs(agent_i) = ac_rhs_i;
                         ac_trigger_mask(agent_i) = ...
                             ACForceFullBroadcast ...
-                            || (ac_solve_count == 1 && ...
+                            || (~ACSyncCacheOnProjectionRefresh && ...
+                            ac_solve_count == 1 && ...
                             ac_round_in_window == 1) ...
                             || ac_lhs_i >= ac_rhs_i;
+                    end
+
+                    if EnableACXiDiagnostics && ac_round_in_window == 1
+                        % Captured before this check's broadcasts update
+                        % Xi_hat_ac, i.e. exactly the values ac_lhs/ac_rhs
+                        % above were computed from for agent 4.
+                        ac_xi_window_start_history{end+1} = single(Xi_ac(:,4,:)); %#ok<AGROW>
+                        ac_xi_hat_window_start_history{end+1} = single(Xi_hat_ac(:,4,:)); %#ok<AGROW>
+                        ac_xi_window_start_time(end+1) = t_set(t_Nr) ...
+                            + (check_i-1)*ACCommunicationInterval; %#ok<AGROW>
                     end
 
                     % All broadcasts at this check are simultaneous.
@@ -791,7 +948,8 @@ for t_Nr = 1:T-1
                 ac_event_count_per_agent = ac_event_count_per_agent ...
                     + step_trigger_count;
                 ac_broadcast_count_set(:,t_Nr) = step_trigger_count;
-                ac_inner_broadcast_count_set(:,t_Nr) = step_trigger_count;
+                ac_inner_broadcast_count_set(:,t_Nr) = step_trigger_count- ...
+                    ac_refresh_sync_count_set(:,t_Nr);
                 ac_physical_trigger_count_set(:,t_Nr) = ...
                     step_physical_trigger_count;
                 consensus_communication_update_set(t_Nr) = ...
@@ -803,9 +961,12 @@ for t_Nr = 1:T-1
             % factorization and update only the inducing targets.
             if ~isempty(Xi_ac)
                 Xi_final = Xi_ac;
+                current_average_error=Xi_ac-P_average_ac;
+                ac_average_error_rms_set(t_Nr)= ...
+                    sqrt(mean(current_average_error(:).^2));
                 MaskedGP = build_or_update_shared_maskedgp_from_xi( ...
                     Xi_final,base_method,AgentQuantity,NumInducingPoints, ...
-                    p_dim,InducingPoints_Coordinates,SigmaF,SigmaL, ...
+                    p_dim,InducingPoints_Coordinates,SigmaF,IPReconstructionSigmaL, ...
                     x_dim,y_dim,MaskedGP);
             end
         end
@@ -817,7 +978,7 @@ for t_Nr = 1:T-1
          aggregation_max_abs_phi_vector(t_Nr)] = ...
             consensus_aggregation_diagnostics(Xi_final, base_method, y_dim);
 
-        if should_refresh_projection && mod(t_Nr-1,100) == 0
+        if should_refresh_projection && mod(t_Nr-1,progress_print_step) == 0
             if iscell(MaskedGP)
                 masked_data_quantity = MaskedGP{1}.DataQuantity;
             else
@@ -837,6 +998,9 @@ for t_Nr = 1:T-1
         if isempty(MaskedGP)
             error('MaskedGP has not been initialized before control prediction.');
         end
+        if isempty(InducingLayerGP)
+            error('InducingLayerGP has not been initialized before bound evaluation.');
+        end
         for AgentNr = 1:AgentQuantity
             if iscell(MaskedGP)
                 current_masked_gp = MaskedGP{AgentNr};
@@ -846,16 +1010,89 @@ for t_Nr = 1:T-1
             if current_masked_gp.DataQuantity == 0
                 error('MaskedGP has no inducing-point data before control prediction.');
             end
-            [mu_hat, ~] = current_masked_gp.predict(x_all_matrix(:,AgentNr));
+            x_query = x_all_matrix(:,AgentNr);
+            [mu_hat, var_com] = predict_gp_mean_variance( ...
+                current_masked_gp,x_query);
             mu_hat(~isfinite(mu_hat)) = 0;
             f_hat_matrix(:,AgentNr) = real(mu_hat);
-        end
 
-    elseif is_local_mode
-        for AgentNr = 1:AgentQuantity
-            [mu_hat, ~] = LocalGP_set{AgentNr}.predict(x_all_matrix(:,AgentNr));
-            mu_hat(~isfinite(mu_hat)) = 0;
-            f_hat_matrix(:,AgentNr) = real(mu_hat);
+            % Ground truth at exactly the same query used by all three GP
+            % layers.  This is deterministic plant dynamics, not the noisy
+            % online observation used to update the LocalGPs.
+            f_true_i = UnknownScale * ...
+                Manipulator_2D_2DoF_UnknownDynamics(x_query);
+            f_true_matrix(:,AgentNr) = f_true_i;
+
+            % Local layer: every expert k is evaluated at controlled agent
+            % i's current state, as required by eta_k(x_i;D_k).
+            mu_local_set = nan(y_dim,AgentQuantity);
+            sigma_local_set = nan(AgentQuantity,1);
+            for LocalAgentNr = 1:AgentQuantity
+                [mu_local_k,var_local_k] = predict_gp_mean_variance( ...
+                    LocalGP_set{LocalAgentNr},x_query);
+                mu_local_set(:,LocalAgentNr) = real(mu_local_k);
+                sigma_local_set(LocalAgentNr) = ...
+                    sqrt(max(real(var_local_k(1)),0));
+            end
+
+            % Inducing layer: the block GP returns [output; expert]
+            % channels.  Under the current framework all experts have the
+            % same covariance, but retain the k index explicitly so a
+            % future uncertainty-aware reconstruction can differ by k.
+            [mu_ind_vector,var_ind_vector] = predict_gp_mean_variance( ...
+                InducingLayerGP,x_query);
+            mu_ind_set = reshape(real(mu_ind_vector),y_dim,AgentQuantity);
+            sigma_ind_set = nan(AgentQuantity,1);
+            for LocalAgentNr = 1:AgentQuantity
+                first_output_idx = (LocalAgentNr-1)*y_dim+1;
+                sigma_ind_set(LocalAgentNr) = sqrt(max( ...
+                    real(var_ind_vector(first_output_idx)),0));
+            end
+
+            % The slide assumes normalized inducing-model weights.  Use
+            % normalized posterior precision at x_i.  With the present
+            % shared X_ind/kernel/noise this correctly reduces to 1/N.
+            ind_precision = 1./max(sigma_ind_set.^2,eps);
+            w_ind = ind_precision/sum(ind_precision);
+
+            eta_local_set = PredictionBoundBeta*sigma_local_set + ...
+                PredictionBoundGamma;
+            eta_ind_set = PredictionBoundBeta*sigma_ind_set + ...
+                PredictionBoundGamma;
+            sigma_com = sqrt(max(real(var_com(1)),0));
+            eta_com = PredictionBoundBeta*sigma_com + ...
+                PredictionBoundGamma;
+
+            local_eta_weighted_set(AgentNr,t_Nr) = ...
+                sum(w_ind.*eta_local_set);
+            inducing_eta_weighted_set(AgentNr,t_Nr) = ...
+                sum(w_ind.*eta_ind_set);
+            communication_eta_set(AgentNr,t_Nr) = eta_com;
+            prediction_error_bound_set(AgentNr,t_Nr) = eta_com + ...
+                sum(w_ind.*(eta_ind_set+eta_local_set));
+
+            local_sigma_per_expert_query_set(AgentNr,:,t_Nr) = ...
+                sigma_local_set.';
+            inducing_sigma_per_expert_query_set(AgentNr,:,t_Nr) = ...
+                sigma_ind_set.';
+            inducing_weight_per_expert_query_set(AgentNr,:,t_Nr) = ...
+                w_ind.';
+            communication_sigma_per_agent_set(AgentNr,t_Nr) = sigma_com;
+
+            % Layerwise actual errors are diagnostics for checking whether
+            % an apparently successful final bound is merely very loose.
+            local_error_set = vecnorm(mu_local_set-f_true_i,2,1).';
+            inducing_error_set = vecnorm( ...
+                mu_ind_set-mu_local_set,2,1).';
+            ideal_inducing_mean = mu_ind_set*w_ind;
+            local_layer_error_weighted_set(AgentNr,t_Nr) = ...
+                sum(w_ind.*local_error_set);
+            inducing_layer_error_weighted_set(AgentNr,t_Nr) = ...
+                sum(w_ind.*inducing_error_set);
+            communication_layer_error_set(AgentNr,t_Nr) = ...
+                norm(real(mu_hat)-ideal_inducing_mean);
+            prediction_error_per_agent_set(AgentNr,t_Nr) = ...
+                norm(f_true_i-real(mu_hat));
         end
 
     elseif is_without_gp_mode
@@ -903,12 +1140,19 @@ for t_Nr = 1:T-1
     u_cell = Manipulator_2D_2DoF_get_u_cell( ...
         x_all_cell, phi_cell, f_hat_matrix, L1, L2, m1, m2);
 
+    current_integration_step = t_step;
+    current_opts = opts;
+    if ACIndependentClockTrial
+        current_integration_step = IntegrationStepSet(t_Nr);
+        current_opts = odeset(opts,'InitialStep',current_integration_step, ...
+            'MaxStep',current_integration_step);
+    end
     [t_ode, x_all_temp] = ode45( ...
         @(current_time,current_state) Manipulator_2D_2DoF_MultiAgent_DynamicFunction( ...
             current_time, current_state, u_cell, L1, L2, m1, m2, UnknownScale), ...
-        [t, t+t_step], x_all, opts);
+        [t, t+current_integration_step], x_all, current_opts);
 
-    if isempty(t_ode) || t_ode(end) < t + t_step - 1e-10
+    if isempty(t_ode) || t_ode(end) < t + current_integration_step - 1e-10
         if ~isempty(SaveFolderName)
             debug_file = fullfile(SaveFolderName, [SaveFileName, '_ODE_FAIL_DEBUG.mat']);
             save(debug_file, 'CurrentMode', 't_Nr', 't', 'x_all', 'x_all_matrix', ...
@@ -926,7 +1170,24 @@ for t_Nr = 1:T-1
     vartheta_all_set(:, t_Nr+1) = x_all_next - s_all_set(:,t_Nr+1) - ...
         kron(ones(AgentQuantity,1), xl_set(:,t_Nr+1));
 
-    if mod(t_Nr,100) == 0
+    % Cartesian manipulator dynamics become singular outside the reachable
+    % disk ||r|| <= L1+L2. Stop a failed closed loop before the next ode45
+    % call produces a flood of singular-matrix warnings.
+    next_state_matrix = reshape(x_all_next,x_dim,AgentQuantity);
+    next_workspace_radius = sqrt(sum(next_state_matrix(1:2,:).^2,1));
+    if any(~isfinite(x_all_next)) || any(~isfinite(next_workspace_radius))
+        SimulationDiverged = true;
+        DivergenceTime = t_set(t_Nr+1);
+        DivergenceReason = 'nonfinite_state';
+        break;
+    elseif any(next_workspace_radius >= L1+L2)
+        SimulationDiverged = true;
+        DivergenceTime = t_set(t_Nr+1);
+        DivergenceReason = 'manipulator_workspace_boundary';
+        break;
+    end
+
+    if mod(t_Nr,progress_print_step) == 0
         elapsed_now = toc(elapsed_tic);
         progress_ratio = t_Nr / (T-1);
         estimated_total_time = elapsed_now / max(progress_ratio, eps);
@@ -943,7 +1204,11 @@ for t_Nr = 1:T-1
     end
 end
 
-TrackingError_vector(end) = norm(vartheta_all_set(:,end));
+if SimulationDiverged
+    TrackingError_vector(t_Nr+1:end) = NaN;
+else
+    TrackingError_vector(end) = norm(vartheta_all_set(:,end));
+end
 elapsed_time = toc(elapsed_tic);
 
 % The two diagnostics required by the experiment goal.
@@ -971,7 +1236,12 @@ fprintf('\n==================================================\n');
 fprintf('Mode: %s\n', CurrentMode);
 fprintf('Total simulation time: %.2f s\n', elapsed_time);
 fprintf('Final tracking error: %.6f\n', TrackingError_vector(end));
+if SimulationDiverged
+    fprintf('DIVERGED at t=%.6f s: %s\n',DivergenceTime,DivergenceReason);
+end
 fprintf('Online updates: %.0f / agent\n', mean(online_update_count));
+online_eviction_count = max(online_update_count-MaxDataQuantity,0);
+fprintf('FIFO evictions: %.0f / agent\n', mean(online_eviction_count));
 fprintf('UnknownScale: %.3f, DisturbanceScale: %.3f\n', UnknownScale, DisturbanceScale);
 fprintf('Projection updates: %d\n', sum(projection_update_set));
 if is_ip_mode
@@ -990,8 +1260,9 @@ if is_dac_mode
         sum(dac_broadcast_event_count_per_agent), ...
         mean(dac_broadcast_event_count_per_agent));
     fprintf(['DAC paper trigger (17): epsilon=%.4g. ', ...
-        'No error-based terminal condition; %d DAC step per physical step.\n'], ...
-        DACTriggerEpsilon,DACStepsPerPhysicalStep);
+        'One update every %.3g s; %d numerical step per update; ', ...
+        'persistent state and no error-based terminal condition.\n'], ...
+        DACTriggerEpsilon,DACUpdateInterval,DACStepsPerUpdate);
     completed_dac_mask = dac_iteration_count_set > 0;
     if any(completed_dac_mask)
         fprintf(['Last DAC step: %d fixed iteration, tracking error %.3e, ', ...
@@ -1001,21 +1272,50 @@ if is_dac_mode
             dac_consensus_disagreement_set(find(completed_dac_mask,1,'last')));
     end
 elseif is_ac_mode
+    fprintf('Physical simulation/control macro-step: %.6g s.\n',SimulationStep);
+    if ACIndependentClockTrial
+        fprintf(['Independent-clock trial: integration splits at exact P/detector boundaries; ' ...
+            'actual intervals range %.6g to %.6g s; R is only a nonbinding cap.\n'], ...
+            min(IntegrationStepSet),max(IntegrationStepSet));
+    end
     fprintf('AC broadcasts: %.0f total, %.2f average per agent.\n', ...
         sum(ac_event_count_per_agent), ...
         mean(ac_event_count_per_agent));
     fprintf('AC online updates: %d. Communication steps: %d.\n', ...
         nnz(projection_update_set), nnz(ac_iteration_count_set > 0));
+    if ACIndependentClockTrial
+        fprintf(['AC periodic cached-broadcast trigger: sigma=%.4g; Delta_c=%.4g s; ' ...
+            'kappa_P=%.4g; step=%.4g; exact 0.1 s P clock; no tolerance terminal.\n'], ...
+            ACPeriodicSigma,ACCommunicationInterval,Kappa_P_AC,ACConsensusStep);
+    else
     fprintf(['AC periodic cached-broadcast trigger: sigma=%.4g; ', ...
         'Delta_c=%.4g s; kappa_P=%.4g; step=%.4g; ', ...
         '%d fixed rounds per 0.1 s P window; ', ...
         'no tolerance terminal.\n'], ...
         ACPeriodicSigma,ACCommunicationInterval,Kappa_P_AC, ...
         ACConsensusStep,ACFixedIterations);
+    end
 end
 if any(isfinite(prediction_error_norm_vector))
     [max_pred_err, idx] = max(prediction_error_norm_vector);
     fprintf('Max controller prediction error: %.6f at t=%.4f\n', max_pred_err, t_set(idx));
+end
+bound_valid_mask = isfinite(prediction_error_per_agent_set) & ...
+    isfinite(prediction_error_bound_set);
+if any(bound_valid_mask,'all')
+    prediction_bound_coverage = mean( ...
+        prediction_error_per_agent_set(bound_valid_mask) <= ...
+        prediction_error_bound_set(bound_valid_mask));
+    prediction_bound_margin_set = prediction_error_bound_set - ...
+        prediction_error_per_agent_set;
+    fprintf(['Three-layer prediction bound: beta=%.2f, gamma=%.3f; ' ...
+        'empirical coverage %.2f%%; minimum margin %.6f.\n'], ...
+        PredictionBoundBeta,PredictionBoundGamma, ...
+        100*prediction_bound_coverage, ...
+        min(prediction_bound_margin_set(bound_valid_mask)));
+else
+    prediction_bound_coverage = NaN;
+    prediction_bound_margin_set = nan(size(prediction_error_bound_set));
 end
 if any(isfinite(aggregation_min_abs_den_vector))
     [min_abs_den, idx] = min(aggregation_min_abs_den_vector, [], 'omitnan');
@@ -1047,9 +1347,23 @@ if ~isempty(SaveFolderName) && ~isempty(SaveFileName)
     end
     save(fullfile(SaveFolderName, save_file_name), ...
         'var_diag_min_set', 'var_diag_near_floor_set', ...
-        't_set', 'TrackingError_vector', 'CurrentMode', 'use_formation', ...
+        't_set', 'SimulationStep', 'TrackingError_vector', 'CurrentMode', 'use_formation', ...
+        'SimulationDiverged','DivergenceTime','DivergenceReason', ...
+        'ACIndependentClockTrial','IntegrationStepSet','OnlineUpdateSchedule','ACCheckSchedule', ...
         'x_all_set', 'vartheta_all_set', 'prediction_error_norm_vector', ...
         'f_hat_norm_vector', 'f_hat_all_set', 'f_true_all_set', ...
+        'PredictionBoundBeta','PredictionBoundGamma', ...
+        'prediction_error_per_agent_set','prediction_error_bound_set', ...
+        'prediction_bound_margin_set','prediction_bound_coverage', ...
+        'local_sigma_per_expert_query_set', ...
+        'inducing_sigma_per_expert_query_set', ...
+        'inducing_weight_per_expert_query_set', ...
+        'communication_sigma_per_agent_set', ...
+        'local_eta_weighted_set','inducing_eta_weighted_set', ...
+        'communication_eta_set', ...
+        'local_layer_error_weighted_set', ...
+        'inducing_layer_error_weighted_set', ...
+        'communication_layer_error_set', ...
          'EnableProjectionDiagnostics', 'f_direct_all_set', ...
          'direct_prediction_error_norm_vector', ...
          'f_ip_cen_all_set', 'ip_cen_prediction_error_norm_vector', ...
@@ -1057,7 +1371,7 @@ if ~isempty(SaveFolderName) && ~isempty(SaveFileName)
         'aggregation_min_abs_den_vector', 'aggregation_min_signed_den_vector', ...
         'aggregation_negative_den_count_vector', 'aggregation_small_den_count_vector', ...
         'aggregation_max_abs_phi_vector', ...
-        'online_update_count', 'online_trigger_count', ...
+        'online_update_count', 'online_trigger_count', 'online_eviction_count', ...
         'online_learning_trigger_count_set', 'online_learning_error_set', ...
         'projection_update_set', ...
         'consensus_communication_update_set', 'consensus_input_change_vector', ...
@@ -1075,8 +1389,10 @@ if ~isempty(SaveFolderName) && ~isempty(SaveFileName)
         'OnlineAgentPolicy', ...
         'ACOnlineUpdateInterval', 'ACOnlineUpdateStep', ...
         'InitialSeedOverride', ...
-         'UnknownScale', 'DisturbanceScale', 'SigmaL', ...
-         'IPReconstructionSigmaN', ...
+         'UnknownScale', 'DisturbanceScale', 'c', 'SigmaL', 'SigmaN', 'MaxDataQuantity', ...
+         'IPReconstructionSigmaN', 'IPReconstructionSigmaL', ...
+         'IPReconstructionPositionLengthScale', ...
+         'IPReconstructionVelocityLengthScale', ...
          'RBCMBetaMax', 'AggregationParameters', ...
          'InducingPoints_Coordinates', 'InducingPointSource', ...
          'InducingPointSeed', ...
@@ -1088,26 +1404,36 @@ if ~isempty(SaveFolderName) && ~isempty(SaveFileName)
         'dac_trigger_count_per_agent_point_set', ...
         'dac_inner_broadcast_count_set', ...
         'dac_iteration_count_set', 'dac_tracking_error_set', ...
+        'dac_average_error_rms_set','dac_window_initial_error_rms_set', ...
         'dac_tracking_error_per_agent_set', ...
         'dac_consensus_disagreement_set', ...
         'EarlyPChange', 'LatePChange', ...
         'DACBroadcastCountPerSecond', ...
         'dac_inner_trigger_instance_set', ...
         'ac_broadcast_count_set', 'ac_inner_broadcast_count_set', ...
+        'ac_refresh_sync_count_set','ACSyncCacheOnProjectionRefresh', ...
         'ac_physical_trigger_count_set', ...
         'ac_physical_triggers_per_agent', 'ac_iteration_count_set', ...
         'ac_consensus_disagreement_set', ...
+        'ac_average_error_rms_set','ac_window_initial_error_rms_set', ...
         'ac_inner_trigger_instance_set', ...
         'ac_tracking_error_history_set', ...
         'EnableACTriggerDiagnostics', 'ac_trigger_measure_set', ...
+        'EnableACXiDiagnostics', 'ac_xi_window_start_history', ...
+        'ac_xi_hat_window_start_history', 'ac_xi_window_start_time', ...
+        'EnableACReferenceDiagnostics','ac_reference_history','ac_reference_time', ...
+        'EnablePReferenceHistory','P_reference_history','P_reference_time', ...
+        'Precision_reference_history', ...
         'ac_trigger_threshold_set', 'ACDetectorStoresSquared', ...
         'ConsensusInputTriggerTol', 'ACPeriodicSigma', ...
         'ACForceFullBroadcast', ...
-         'DACTriggerEpsilon', 'Kappa_P_DAC', 'Kappa_P_AC', ...
+         'DACTriggerEpsilon','DACForceProjectionRefreshBroadcast', ...
+         'DACRefreshCorrectionRounds', ...
+         'Kappa_P_DAC', 'DACUpdateInterval', 'Kappa_P_AC', ...
          'ACConsensusStep', 'ACCommunicationInterval', ...
          'ACChecksPerPhysicalStep', 'ACTimingMode', ...
          'ACFixedIterations', ...
-        'DACStepsPerPhysicalStep');
+        'DACStepsPerUpdate', 'DACStepsPerPhysicalStep');
 end
 
 end
@@ -1188,6 +1514,31 @@ alpha = L' \ aux_alpha;
 MaskedGP.Y(1:M,:) = Y;
 MaskedGP.aux_alpha(1:M,:) = aux_alpha;
 MaskedGP.alpha(1:M,:) = alpha;
+end
+
+%% ========================================================================
+% Reconstruct all uncommunicated inducing-layer experts with one factor
+% ========================================================================
+function InducingLayerGP = build_or_update_inducing_layer_gp( ...
+    local_mu_at_inducing,InducingPoints_Coordinates,reconstruction_sigma_n, ...
+    SigmaF,SigmaL,x_dim,y_dim,AgentQuantity,InducingLayerGP)
+
+M = size(InducingPoints_Coordinates,2);
+% local_mu_at_inducing is y_dim-by-AgentQuantity-by-M.  Flattening its
+% first two axes makes each expert/output pair one independent GP output
+% while preserving a shared covariance factorization.
+inducing_targets = reshape( ...
+    local_mu_at_inducing,y_dim*AgentQuantity,M);
+
+if isempty(InducingLayerGP) || InducingLayerGP.DataQuantity ~= M
+    InducingLayerGP = LocalGP_MultiOutput( ...
+        x_dim,y_dim*AgentQuantity,M,reconstruction_sigma_n,SigmaF,SigmaL);
+    InducingLayerGP.add_Alldata( ...
+        InducingPoints_Coordinates,inducing_targets);
+else
+    InducingLayerGP = update_maskedgp_targets( ...
+        InducingLayerGP,inducing_targets);
+end
 end
 
 % Dataset-style decoder: Xi_final -> phi -> shared MaskedGP
@@ -1282,7 +1633,7 @@ function f_direct = direct_aggregate_localgp_prediction( ...
 method = lower(method);
 y_dim = LocalGP_set{1}.y_dim;
 prior_var = SigmaF^2;
-aggregation_cfg = control_aggregation_parameters();
+aggregation_cfg = control_aggregation_parameters(LocalGP_set{1}.SigmaN);
 posterior_var_floor = aggregation_cfg.posterior_var_floor;
 rbcm_beta_max = aggregation_cfg.rbcm_beta_max;
 bcm_prior_scale = aggregation_cfg.bcm_prior_scale;

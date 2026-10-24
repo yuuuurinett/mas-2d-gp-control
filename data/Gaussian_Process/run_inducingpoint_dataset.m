@@ -111,7 +111,7 @@ MaxDataPerAgent = min(floor(N_train/AgentQuantity), 3000);
 
 switch upper(DatasetName)
     case {'KIN40K'}
-        NumInducingPoints = 2000;
+        NumInducingPoints = 2500;
     case {'POL'}
         NumInducingPoints = 2000;
     case {'PUMADYN32NM'}
@@ -228,7 +228,6 @@ for mi = 1:numel(AllModes)
 
     iter = 0;
     max_iter = 3000;
-    ConsensusBaselineIter = 500;
 
     % Convergence diagnostics
     conv_r = 1;
@@ -317,11 +316,15 @@ for mi = 1:numel(AllModes)
         broadcast_count_mean = mean(broadcast_count_per_agent);
         comm_train = point_trigger_count_mean;
         comm_test  = 0;
-        trigger_ratio_train = comm_train / ConsensusBaselineIter;
+        % Fraction of consensus rounds in which an agent transmits a given point
+        % (a time-triggered scheme transmits every point in every round = 100%).
+        trigger_ratio_train = comm_train / iter_converge;
         fprintf('  [IP-DAC] 收敛步数:%d  平均触发次数/agent/point:%.1f\n', ...
             iter_converge, comm_train);
         fprintf('  [IP-DAC broadcast stats] broadcast/agent:%.1f  point-trigger/agent/point:%.1f\n', ...
             broadcast_count_mean, point_trigger_count_mean);
+        fprintf('  [IP-DAC] trigger ratio = %.1f / %d = %.1f%%\n', ...
+            comm_train, iter_converge, 100*trigger_ratio_train);
 
         Xi_final = Pi - Zeta;
 
@@ -399,11 +402,15 @@ for mi = 1:numel(AllModes)
         broadcast_count_mean = mean(broadcast_count_per_agent);
         comm_train = point_trigger_count_mean;
         comm_test  = 0;
-        trigger_ratio_train = comm_train / ConsensusBaselineIter;
+        % Fraction of consensus rounds in which an agent transmits a given point
+        % (a time-triggered scheme transmits every point in every round = 100%).
+        trigger_ratio_train = comm_train / iter_converge;
         fprintf('  [IP-AC] 收敛步数:%d  平均更新次数/agent/point:%.1f\n', ...
             iter_converge, comm_train);
         fprintf('  [IP-AC broadcast stats] broadcast/agent:%.1f  point-trigger/agent/point:%.1f\n', ...
             broadcast_count_mean, point_trigger_count_mean);
+        fprintf('  [IP-AC] trigger ratio = %.1f / %d = %.1f%%\n', ...
+            comm_train, iter_converge, 100*trigger_ratio_train);
 
         Xi_final = Xi;
     end
@@ -519,7 +526,7 @@ for mi = 1:numel(AllModes)
         'compute_variance', ...
         't_ip_test_kernel', 't_ip_test_mean', 't_ip_test_variance', ...
         'comm_train', 'comm_test', 'iter_converge', ...
-        'event_count_mean', 'trigger_ratio_train', 'ConsensusBaselineIter', ...
+        'event_count_mean', 'trigger_ratio_train', ...
         'current_method', 'seed', 'train_ratio', 'NumInducingPoints', 'N_train', 'N_eval', ...
         'smse_curve', 'rmse_curve', ...
         'trigger_count_per_agent', 'trigger_per_agent_point', ...

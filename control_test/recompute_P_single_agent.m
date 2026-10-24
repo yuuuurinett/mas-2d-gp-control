@@ -9,7 +9,7 @@ method = lower(method);
 M = NumInducingPoints;
 prior_var = LocalGP_set{AgentNr}.SigmaF^2;
 y_dim = 2;
-aggregation_cfg = control_aggregation_parameters();
+aggregation_cfg = control_aggregation_parameters(LocalGP_set{AgentNr}.SigmaN);
 posterior_var_floor = aggregation_cfg.posterior_var_floor;
 rbcm_beta_max = aggregation_cfg.rbcm_beta_max;
 bcm_prior_scale = aggregation_cfg.bcm_prior_scale;
@@ -21,8 +21,8 @@ for m = 1:M
     for d = 1:y_dim
         % 均值截断：防止online learning初期GP外推产生离谱预测值
         mu = max(-30, min(30, mu_n(d)));
-        % 方差下限：1e-8对GP而言太小，容易在数据点重合时让1/vs爆炸
-        % 提高到1e-3，符合物理上GP不确定性的合理下限
+        % Match the dataset logic: bound latent posterior variance below by
+        % the local observation-noise variance before taking its inverse.
         vs = max(var_n(d), posterior_var_floor);
         raw_beta = 0.5 * (log(prior_var) - log(vs));
         beta_gpoe = max(min(raw_beta,aggregation_cfg.gpoe_beta_max),eps);

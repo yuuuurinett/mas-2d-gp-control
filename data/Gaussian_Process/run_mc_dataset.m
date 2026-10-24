@@ -181,15 +181,9 @@ for d = 1:numel(datasets)
         if run_tp
             try
                 ensure_dataset_folder(DatasetResultRoot, dname);
-                % num_eval matches NumInducingPoints used in IP-DAC/IP-AC
-                % (hardcoded values from run_inducingpoint_dataset.m lines 114-121)
-                switch upper(dname)
-                    case 'KIN40K',      tp_M = 2100;
-                    case 'POL',         tp_M = 2000;
-                    case 'PUMADYN32NM', tp_M = 200;
-                    case 'SARCOS',      tp_M = 1500;
-                    otherwise,          tp_M = 2500;
-                end
+                % Evaluate TP on the same 3000 test points as CEN / NBR / IP
+                % (run_testpoint_dataset uses min(tp_M, #test points)).
+                tp_M = 3000;
                 fprintf('[TP] Dataset=%s, tp_M=%d\n', dname, tp_M);
                 run_testpoint_dataset(dname, 'all', train_ratio, seed, tp_M);
             catch ME

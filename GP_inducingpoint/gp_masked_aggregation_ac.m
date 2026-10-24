@@ -12,7 +12,7 @@ M         = NumInducingPoints;
 y_dim     = 2;
 prior_var = SigmaF^2;
 p_dim     = 2 * y_dim;
-aggregation_cfg = control_aggregation_parameters();
+aggregation_cfg = control_aggregation_parameters(LocalGP_set{1}.SigmaN);
 
 %% 1. 拓扑参数
 % 用循环无向图（和dataset实验一致）
