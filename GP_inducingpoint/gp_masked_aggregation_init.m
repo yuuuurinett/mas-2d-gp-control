@@ -14,7 +14,7 @@ function [P, p_dim, diag_info] = gp_masked_aggregation_init( ...
 method = lower(method);
 M = NumInducingPoints;
 prior_var = LocalGP_set{1}.SigmaF^2;  % sigma_0^²
-aggregation_cfg = control_aggregation_parameters();
+aggregation_cfg = control_aggregation_parameters(LocalGP_set{1}.SigmaN);
 posterior_var_floor = aggregation_cfg.posterior_var_floor;
 rbcm_beta_max = aggregation_cfg.rbcm_beta_max;
 bcm_prior_scale = aggregation_cfg.bcm_prior_scale;
@@ -32,6 +32,13 @@ end
 P = zeros(p_dim, AgentQuantity, M);
 diag_info.min_var = inf(AgentQuantity,1);
 diag_info.near_floor_count = zeros(AgentQuantity,1);
+diag_info.precision_per_agent_point = zeros(AgentQuantity,M);
+% Keep the unaggregated local predictions at the inducing points for the
+% three-layer prediction-bound diagnostic.  These are the targets of
+% D_ind,k = {X_ind, mu_k(X_ind;D_k)}; they do not affect aggregation.
+y_dim = LocalGP_set{1}.y_dim;
+diag_info.local_mu_at_inducing = zeros(y_dim,AgentQuantity,M);
+diag_info.local_var_at_inducing = zeros(y_dim,AgentQuantity,M);
 
 for AgentNr = 1:AgentQuantity
     [mu_all, var_all] = predict_inducing_points_batch( ...
@@ -42,6 +49,12 @@ for AgentNr = 1:AgentQuantity
     % can tell whether variance is approaching the floor over time.
     diag_info.min_var(AgentNr) = min(var_all(:));
     diag_info.near_floor_count(AgentNr) = nnz(var_all(:) < posterior_var_floor*10);
+    diag_info.precision_per_agent_point(AgentNr,:) = ...
+        mean(1./max(var_all,posterior_var_floor),1);
+    diag_info.local_mu_at_inducing(:,AgentNr,:) = reshape( ...
+        mu_all,y_dim,1,M);
+    diag_info.local_var_at_inducing(:,AgentNr,:) = reshape( ...
+        var_all,y_dim,1,M);
 
     for InducingPointIdx = 1:M
         mu_n = mu_all(:,InducingPointIdx);
